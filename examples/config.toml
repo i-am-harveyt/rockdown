@@ -15,11 +15,12 @@ muted = "#8995a7"
 accent = "#9cc7b5"
 
 # Specifying keys replaces the default shortcut map.
-# Supported actions: save, explorer (toggle), terminal, editor, help,
-# buffer-delete, previous-buffer, next-buffer.
+# Supported actions: save, paste (clipboard), explorer (toggle), terminal,
+# editor, help, buffer-delete, previous-buffer, next-buffer.
 [keys]
 cmd-s = "save"
 ctrl-s = "save"
+cmd-v = "paste"
 cmd-e = "explorer"
 ctrl-e = "explorer"
 "ctrl-`" = "terminal"

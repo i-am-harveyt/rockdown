@@ -1,4 +1,6 @@
-use gpui::{Modifiers, MouseButton, Point, TestAppContext, VisualTestContext, px, size};
+use gpui::{
+    ClipboardItem, Modifiers, MouseButton, Point, TestAppContext, VisualTestContext, px, size,
+};
 use rockdown::{
     app::{Pane, Workspace},
     config::Config,
@@ -35,6 +37,35 @@ fn hit_rows(window: &mut VisualTestContext, view: &gpui::Entity<Workspace>) -> V
             .map(|row| (row.source_row, f32::from(row.height)))
             .collect()
     })
+}
+
+#[gpui::test]
+fn cmd_v_pastes_clipboard_into_the_editor(cx: &mut TestAppContext) {
+    let (mut window, view) = table_window(cx);
+    cx.write_to_clipboard(ClipboardItem::new_string("pasted text".into()));
+    window.simulate_keystrokes("cmd-v");
+    window.run_until_parked();
+    assert!(window.update(|_, cx| {
+        view.read(cx)
+            .documents
+            .current()
+            .buffer
+            .text()
+            .contains("pasted text")
+    }));
+    // Insert mode: the paste joins the current undo transaction at the caret.
+    window.simulate_keystrokes("escape i");
+    cx.write_to_clipboard(ClipboardItem::new_string(" twice".into()));
+    window.simulate_keystrokes("cmd-v");
+    window.run_until_parked();
+    assert!(window.update(|_, cx| {
+        view.read(cx)
+            .documents
+            .current()
+            .buffer
+            .text()
+            .contains(" twice")
+    }));
 }
 
 #[gpui::test]
@@ -90,6 +121,57 @@ fn table_rows_render_as_grid_and_click_selects_source_row(cx: &mut TestAppContex
             .clone()),
         "| **alpha** | A longer description with many words that must wrap independently inside its own column without shifting other columns or losing its text. | 12 |"
     );
+}
+
+#[gpui::test]
+fn image_rows_reserve_fitted_space_and_never_overlap_following_text(cx: &mut TestAppContext) {
+    // 4x2 red PNG: width-driven sizing gives height = width / 2.
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x04\x00\x00\x00\x02\x08\x06\x00\x00\x00\x7f\xa8}c\x00\x00\x00\x12IDATx\x9cc\xf8\xcf\xc0\xf0\x1f\x193\xa0\x0b\x00\x00\x0f!\x0f\xf1\x047\xc6\x9f\x00\x00\x00\x00IEND\xaeB`\x82";
+    let sandbox = tempfile::tempdir().unwrap();
+    let directory = sandbox.path().to_path_buf();
+    std::fs::write(directory.join("pic.png"), PNG).unwrap();
+    let (view, window) = cx.add_window_view(|window, cx| {
+        Workspace::new(
+            Config::default(),
+            None,
+            Document::untitled("before\n![](pic.png)\nafter\n"),
+            Explorer::open(&directory).unwrap(),
+            window,
+            cx,
+        )
+    });
+    let mut window = window.clone();
+
+    let layout = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            view.read(cx).layouts[Pane::Editor.index()]
+                .rows
+                .iter()
+                .map(|row| {
+                    (
+                        row.source_row,
+                        f32::from(row.origin.y),
+                        f32::from(row.height),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let rows = layout(&mut window);
+    let image_row = rows.iter().find(|(row, _, _)| *row == 1).unwrap();
+    let after = rows.iter().find(|(row, _, _)| *row == 2).unwrap();
+    // The row reserves the image's fitted height (width / aspect) beyond the
+    // one text line it occupies in the buffer.
+    assert!(image_row.2 > 2. * 30., "image row reserves space: {rows:?}");
+    // The next row starts exactly at the image row's bottom edge.
+    assert!((after.1 - (image_row.1 + image_row.2)).abs() < 0.5);
+
+    // Width-driven: a narrower pane shrinks the reserved image height.
+    window.simulate_resize(size(px(700.), px(900.)));
+    window.run_until_parked();
+    let narrow = layout(&mut window);
+    let narrow_image = narrow.iter().find(|(row, _, _)| *row == 1).unwrap();
+    assert!(narrow_image.2 < image_row.2, "narrow pane: {narrow:?}");
 }
 
 #[gpui::test]

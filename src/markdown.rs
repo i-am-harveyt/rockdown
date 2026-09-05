@@ -97,12 +97,44 @@ pub struct TableRow {
     pub cells: Vec<Vec<Span>>,
 }
 
+/// Width of an inline image preview. `None` uses the renderer's default share
+/// of the pane width.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ImageWidth {
+    /// Fraction of the editor pane width, e.g. `0.6` for 60%.
+    Fraction(f32),
+    /// Absolute width in points.
+    Points(f32),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreviewImage {
+    pub url: String,
+    pub width: Option<ImageWidth>,
+}
+
+/// Parse an image title as a width override: `"40%"` is a pane-width share,
+/// `"320px"` an absolute width. Anything else is not a size.
+fn parse_image_width(title: &str) -> Option<ImageWidth> {
+    let title = title.trim();
+    if let Some(percent) = title.strip_suffix('%') {
+        let percent: f32 = percent.trim().parse().ok()?;
+        return (percent.is_finite() && percent > 0.0)
+            .then_some(ImageWidth::Fraction(percent / 100.0));
+    }
+    if let Some(points) = title.strip_suffix("px") {
+        let points: f32 = points.trim().parse().ok()?;
+        return (points.is_finite() && points > 0.0).then_some(ImageWidth::Points(points));
+    }
+    None
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderedLine {
     pub source_row: usize,
     pub kind: BlockKind,
     pub spans: Vec<Span>,
-    pub images: Vec<String>,
+    pub images: Vec<PreviewImage>,
     pub table: Option<TableRow>,
 }
 
@@ -239,8 +271,13 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
                 Tag::Emphasis => style.emphasis += 1,
                 Tag::Strong => style.strong += 1,
                 Tag::Strikethrough => style.strike += 1,
-                Tag::Image { dest_url, .. } => {
-                    lines[row].images.push(dest_url.to_string());
+                Tag::Image {
+                    dest_url, title, ..
+                } => {
+                    lines[row].images.push(PreviewImage {
+                        url: dest_url.to_string(),
+                        width: parse_image_width(&title),
+                    });
                     style.links.push(dest_url.into_string());
                 }
                 Tag::Link { dest_url, .. } => {
@@ -590,6 +627,18 @@ mod tests {
         assert_eq!(text(&lines[1]), "plain body");
         assert!(lines[1].spans.iter().all(|span| span.code));
         assert!(lines[1].spans.iter().all(|span| span.color.is_some()));
+    }
+
+    #[test]
+    fn image_titles_set_preview_width() {
+        let lines = project(
+            "![a](a.png)\n![b](b.png \"40%\")\n![c](c.png \"320px\")\n![d](d.png \"nope\")\n",
+        );
+        assert_eq!(lines[0].images[0].width, None);
+        assert_eq!(lines[1].images[0].width, Some(ImageWidth::Fraction(0.4)));
+        assert_eq!(lines[2].images[0].width, Some(ImageWidth::Points(320.0)));
+        assert_eq!(lines[3].images[0].width, None);
+        assert_eq!(lines[3].images[0].url, "d.png");
     }
 
     #[test]

@@ -16,6 +16,42 @@ use std::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
+actions!(
+    rockdown,
+    [
+        Save,
+        Paste,
+        ExplorerToggle,
+        TerminalToggle,
+        EditorPane,
+        HelpToggle,
+        PreviousBuffer,
+        NextBuffer,
+        BufferDelete
+    ]
+);
+
+/// Bind the configured shortcut map through GPUI's keymap. Bound actions reach
+/// the app even when macOS routes a key equivalent (like Cmd-V) through the
+/// input context instead of delivering a plain key-down event.
+pub fn bind_config_keys(config: &Config, cx: &mut App) {
+    cx.bind_keys(config.keys.iter().filter_map(|(key, action)| {
+        let action: Box<dyn Action> = match action.as_str() {
+            "save" => Box::new(Save),
+            "paste" => Box::new(Paste),
+            "explorer" => Box::new(ExplorerToggle),
+            "terminal" => Box::new(TerminalToggle),
+            "editor" => Box::new(EditorPane),
+            "help" => Box::new(HelpToggle),
+            "previous-buffer" => Box::new(PreviousBuffer),
+            "next-buffer" => Box::new(NextBuffer),
+            "buffer-delete" => Box::new(BufferDelete),
+            _ => return None,
+        };
+        KeyBinding::load(key, action, None, false, None, &DummyKeyboardMapper).ok()
+    }));
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
     Editor,
@@ -69,6 +105,7 @@ impl Workspace {
     ) -> Self {
         let focus = cx.focus_handle();
         focus.focus(window);
+        bind_config_keys(&config, cx);
         let projection = markdown::project(&document.buffer.text());
         Self {
             config,
@@ -296,6 +333,14 @@ impl Workspace {
         }
         Ok(())
     }
+    /// Dispatch a named action from a keymap binding, surfacing failures in
+    /// the status bar instead of dropping them.
+    fn run_action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Err(error) = self.action(action, window, cx) {
+            self.message = format!("{error:#}");
+            cx.notify();
+        }
+    }
     fn action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
         match action {
             "save" => self.save(None, false)?,
@@ -318,6 +363,11 @@ impl Workspace {
                 cx,
             )?,
             "buffer-delete" => self.change_document(|documents| documents.delete(false), cx)?,
+            "paste" => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    self.type_text(&text);
+                }
+            }
             _ => {}
         }
         self.focus.focus(window);
@@ -440,6 +490,7 @@ impl Workspace {
             "help" => self.help = true,
             "config" => {
                 let (config, path) = Config::load(self.config_path.as_deref())?;
+                bind_config_keys(&config, cx);
                 self.config = config;
                 self.config_path = path;
                 self.message = "Configuration reloaded; new shell setting applies to the next terminal session".into();
@@ -473,14 +524,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<bool> {
         let stroke = &event.keystroke;
-        if let Some(action) = self.config.keys.iter().find_map(|(key, action)| {
-            let binding = Keystroke::parse(key).ok()?;
-            (binding.key == stroke.key && binding.modifiers == stroke.modifiers)
-                .then(|| action.clone())
-        }) {
-            self.action(&action, window, cx)?;
-            return Ok(true);
-        }
+        // Configured shortcuts dispatch through GPUI keymap actions (see
+        // bind_config_keys); this handler only covers the hardcoded keys.
         let key = crate::keyboard::key(stroke);
         if stroke.modifiers.platform && stroke.key == "q" {
             if self.can_close(cx) {
@@ -673,17 +718,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        eprintln!(
-            "MOUSE_DOWN at={:?} rows={}",
-            event.position,
-            self.layouts[pane.index()].rows.len()
-        );
-        for row in &self.layouts[pane.index()].rows {
-            eprintln!(
-                "  HITROW {} origin_y={:?} h={:?}",
-                row.source_row, row.origin.y, row.height
-            );
-        }
         let hit = self.layouts[pane.index()].rows.iter().find(|row| {
             event.position.y >= row.origin.y && event.position.y < row.origin.y + row.height
         });
@@ -788,45 +822,53 @@ impl Workspace {
                     .min_w_0()
                     .flex()
                     .overflow_x_scroll()
-                    .children(self.documents.entries().iter().map(|entry| {
-                        let id = entry.id;
-                        let name = entry
-                            .document
-                            .path
-                            .as_ref()
-                            .and_then(|path| path.file_name())
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "Untitled".into());
-                        let label = format!(
-                            "{}: {}{}",
-                            id,
-                            name,
-                            if entry.document.buffer.dirty() {
-                                " [+]"
-                            } else {
-                                ""
-                            }
-                        );
-                        div()
-                            .id(("buffer-tab", id))
-                            .px_3()
-                            .py_2()
-                            .flex_shrink_0()
-                            .cursor_pointer()
-                            .text_color(if id == active { accent } else { muted })
-                            .border_b_2()
-                            .border_color(if id == active { accent } else { panel })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if let Err(error) =
-                                    this.change_document(|documents| documents.select(id), cx)
-                                {
-                                    this.message = error.to_string();
-                                }
-                                this.focus.focus(window);
-                                cx.notify();
-                            }))
-                            .child(label)
-                    })),
+                    .children(
+                        self.documents
+                            .entries()
+                            .iter()
+                            .enumerate()
+                            .map(|(index, entry)| {
+                                let id = entry.id;
+                                let name = entry
+                                    .document
+                                    .path
+                                    .as_ref()
+                                    .and_then(|path| path.file_name())
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| "Untitled".into());
+                                // Buffer numbers are positional: closing a buffer renumbers
+                                // the rest, like Vim, instead of leaving gaps.
+                                let label = format!(
+                                    "{}: {}{}",
+                                    index + 1,
+                                    name,
+                                    if entry.document.buffer.dirty() {
+                                        " [+]"
+                                    } else {
+                                        ""
+                                    }
+                                );
+                                div()
+                                    .id(("buffer-tab", id))
+                                    .px_3()
+                                    .py_2()
+                                    .flex_shrink_0()
+                                    .cursor_pointer()
+                                    .text_color(if id == active { accent } else { muted })
+                                    .border_b_2()
+                                    .border_color(if id == active { accent } else { panel })
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        if let Err(error) = this
+                                            .change_document(|documents| documents.select(id), cx)
+                                        {
+                                            this.message = error.to_string();
+                                        }
+                                        this.focus.focus(window);
+                                        cx.notify();
+                                    }))
+                                    .child(label)
+                            }),
+                    ),
             )
             .children(
                 [
@@ -925,6 +967,15 @@ impl Render for Workspace {
         };
         div().size_full().flex().flex_col().bg(background).text_color(foreground).font_family(self.config.font_family.clone()).text_size(px(self.config.font_size))
             .track_focus(&self.focus).on_key_down(cx.listener(Self::key_down))
+            .on_action(cx.listener(|this, _: &Save, window, cx| this.run_action("save", window, cx)))
+            .on_action(cx.listener(|this, _: &Paste, window, cx| this.run_action("paste", window, cx)))
+            .on_action(cx.listener(|this, _: &ExplorerToggle, window, cx| this.run_action("explorer", window, cx)))
+            .on_action(cx.listener(|this, _: &TerminalToggle, window, cx| this.run_action("terminal", window, cx)))
+            .on_action(cx.listener(|this, _: &EditorPane, window, cx| this.run_action("editor", window, cx)))
+            .on_action(cx.listener(|this, _: &HelpToggle, window, cx| this.run_action("help", window, cx)))
+            .on_action(cx.listener(|this, _: &PreviousBuffer, window, cx| this.run_action("previous-buffer", window, cx)))
+            .on_action(cx.listener(|this, _: &NextBuffer, window, cx| this.run_action("next-buffer", window, cx)))
+            .on_action(cx.listener(|this, _: &BufferDelete, window, cx| this.run_action("buffer-delete", window, cx)))
             .on_mouse_move(cx.listener(Self::resize_explorer))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.stop_explorer_resize(cx)))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| this.stop_explorer_resize(cx)))
@@ -960,7 +1011,7 @@ impl Render for Workspace {
     }
 }
 
-const HELP: &str = "Editing: i/a/I/A insert · o/O new line · Esc normal · v visual\nReturn splits at the caret in Insert mode; in Normal mode it opens a line below.\nh/j/k/l or arrows · w/b/e words · 0/$ line · gg/G document\nx delete · dd/dw/d$ delete · cc/cw change · yy yank · p/P paste\nu undo · Ctrl-R redo · counts: 3j, 2dd · /find then n repeat\n:w [filename] save · :w! overwrite conflict · :e[!] [file] reload/open\n:q close window · :q! discard all and close · :wq save and close\n\nBuffers: click tabs, or use Prev / Next / Close above the editor.\n:bp / :bprevious / :previous-buffer · Ctrl-PageUp\n:bn / :bnext / :next-buffer · Ctrl-PageDown\n:bd / :bdelete / :buffer-delete · Cmd-W or Ctrl-Shift-W\n:bd! discards unsaved changes. Deleting a buffer does not delete its file.\n:e filename opens or activates a buffer without discarding other edits.\n\nExplorer: Ctrl-E / Cmd-E hide/show · Ctrl-W l or :ex reveal and focus\nDrag the left edge to resize. Hiding preserves staged changes and width.\nEnter open · - parent · Edit filenames with Vim.\no creates a line; trailing / creates a directory.\ndd stages deletion. :w commits; :e! discards. Deletes go to .rockdown-trash.\n\nTerminal: Ctrl-` toggle · Ctrl-W h editor / l files / j terminal\nReturn executes the command. Ctrl-C interrupts, Ctrl-D exits. Cmd-V pastes.\n\nConfiguration: ~/.config/rockdown/config.toml or config.lua\n--config PATH selects an explicit file. :config reloads settings.\nTOML wins if both default files exist. Lua must return a settings table.\n\nInactive lines render Markdown; the cursor line exposes editable syntax.\nClick a line to edit. Mouse wheel scrolls. Cmd-S saves. Esc closes help.";
+const HELP: &str = "Editing: i/a/I/A insert · o/O new line · Esc normal · v visual\nReturn splits at the caret in Insert mode; in Normal mode it opens a line below.\nh/j/k/l or arrows · w/b/e words · 0/$ line · gg/G document\nx delete · dd/dw/d$ delete · cc/cw change · yy yank · p/P paste\nu undo · Ctrl-R redo · counts: 3j, 2dd · /find then n repeat\nCmd-V pastes the clipboard at the caret (terminal: bracketed paste).\nImages render at 60% of the pane width; ![alt](pic.png \"40%\") or \"320px\" resizes.\n:w [filename] save · :w! overwrite conflict · :e[!] [file] reload/open\n:q close window · :q! discard all and close · :wq save and close\n\nBuffers: click tabs, or use Prev / Next / Close above the editor.\n:bp / :bprevious / :previous-buffer · Ctrl-PageUp\n:bn / :bnext / :next-buffer · Ctrl-PageDown\n:bd / :bdelete / :buffer-delete · Cmd-W or Ctrl-Shift-W\n:bd! discards unsaved changes. Deleting a buffer does not delete its file.\n:e filename opens or activates a buffer without discarding other edits.\n\nExplorer: Ctrl-E / Cmd-E hide/show · Ctrl-W l or :ex reveal and focus\nDrag the left edge to resize. Hiding preserves staged changes and width.\nEnter open · - parent · Edit filenames with Vim.\no creates a line; trailing / creates a directory.\ndd stages deletion. :w commits; :e! discards. Deletes go to .rockdown-trash.\n\nTerminal: Ctrl-` toggle · Ctrl-W h editor / l files / j terminal\nReturn executes the command. Ctrl-C interrupts, Ctrl-D exits. Cmd-V pastes.\n\nConfiguration: ~/.config/rockdown/config.toml or config.lua\n--config PATH selects an explicit file. :config reloads settings.\nTOML wins if both default files exist. Lua must return a settings table.\n\nInactive lines render Markdown; the cursor line exposes editable syntax.\nClick a line to edit. Mouse wheel scrolls. Cmd-S saves. Esc closes help.";
 
 fn utf8_offset(text: &str, utf16: usize) -> usize {
     let mut units = 0;

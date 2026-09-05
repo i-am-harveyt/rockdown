@@ -53,6 +53,7 @@ impl Default for Config {
             keys: BTreeMap::from([
                 ("cmd-s".into(), "save".into()),
                 ("ctrl-s".into(), "save".into()),
+                ("cmd-v".into(), "paste".into()),
                 ("cmd-e".into(), "explorer".into()),
                 ("ctrl-e".into(), "explorer".into()),
                 ("ctrl-`".into(), "terminal".into()),
@@ -141,6 +142,7 @@ impl Config {
             gpui::Keystroke::parse(key).with_context(|| format!("Invalid shortcut {key}"))?;
             if ![
                 "save",
+                "paste",
                 "explorer",
                 "terminal",
                 "editor",

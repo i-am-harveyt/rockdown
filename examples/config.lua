@@ -17,6 +17,7 @@ return {
   keys = {
     ["cmd-s"] = "save",
     ["ctrl-s"] = "save",
+    ["cmd-v"] = "paste",
     ["cmd-e"] = "explorer",
     ["ctrl-e"] = "explorer",
     ["ctrl-`"] = "terminal",

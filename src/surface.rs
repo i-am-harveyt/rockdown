@@ -11,8 +11,9 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
-/// Rendered height of an inline image, in pixels.
-const IMAGE_HEIGHT: Pixels = px(160.);
+/// Default inline-image width as a share of the editor pane. Overridable per
+/// image with the title syntax `![alt](path "40%")` or `"320px"`.
+const DEFAULT_IMAGE_WIDTH: f32 = 0.6;
 
 // Decoded bitmaps by path. Layout positions are computed by the renderer, so
 // an image can never escape its row and paint over following content; the
@@ -513,22 +514,25 @@ impl Element for Surface {
                     .unwrap_or(&app.explorer.directory);
                 for image in &app.projection[source_row].images {
                     // Remote images remain linked alt text: opening a document never phones home.
-                    if image.contains("://") {
+                    if image.url.contains("://") {
                         continue;
                     }
-                    let Some(bitmap) = load_image(&base.join(image)) else {
+                    let Some(bitmap) = load_image(&base.join(&image.url)) else {
                         continue;
                     };
-                    // Aspect-fit the bitmap into the row: taller images are
-                    // capped at IMAGE_HEIGHT so they never cover later rows.
+                    // Width-driven sizing: default 60% of the pane width, with a
+                    // per-image override from the title (`![alt](pic.png "40%")`
+                    // or `"320px"`). Height follows the bitmap's aspect ratio,
+                    // clamped so a wide image never exceeds the pane.
                     let bitmap_size = bitmap.size(0);
                     let ratio = bitmap_size.width.0 as f32 / bitmap_size.height.0 as f32;
-                    let mut height = IMAGE_HEIGHT;
-                    let mut width = height * ratio;
-                    if width > available {
-                        width = available;
-                        height = width / ratio;
+                    let width = match image.width {
+                        Some(crate::markdown::ImageWidth::Fraction(share)) => available * share,
+                        Some(crate::markdown::ImageWidth::Points(points)) => px(points),
+                        None => available * DEFAULT_IMAGE_WIDTH,
                     }
+                    .min(available);
+                    let height = width / ratio;
                     images.push((
                         Bounds::new(point(origin.x, y + row_height), size(width, height)),
                         bitmap,
