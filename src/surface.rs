@@ -5,7 +5,39 @@ use crate::{
 };
 use gpui::{prelude::*, *};
 use pulldown_cmark::Alignment;
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Arc, LazyLock, Mutex},
+};
+
+/// Rendered height of an inline image, in pixels.
+const IMAGE_HEIGHT: Pixels = px(160.);
+
+// Decoded bitmaps by path. Layout positions are computed by the renderer, so
+// an image can never escape its row and paint over following content; the
+// cache only saves repeated decoding of the same file.
+static IMAGES: LazyLock<Mutex<HashMap<PathBuf, Option<Arc<RenderImage>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn load_image(path: &Path) -> Option<Arc<RenderImage>> {
+    let mut cache = IMAGES.lock().ok()?;
+    if !cache.contains_key(path) {
+        let decoded = std::fs::read(path)
+            .ok()
+            .and_then(|bytes| image::load_from_memory(&bytes).ok())
+            .map(|image| {
+                let mut rgba = image.into_rgba8();
+                // The sprite atlas expects BGRA bytes.
+                for pixel in rgba.as_chunks_mut::<4>().0 {
+                    pixel.swap(0, 2);
+                }
+                Arc::new(RenderImage::new(vec![image::Frame::new(rgba)]))
+            });
+        cache.insert(path.to_path_buf(), decoded);
+    }
+    cache.get(path).cloned().flatten()
+}
 
 #[derive(Default)]
 pub struct SurfaceLayout {
@@ -32,7 +64,7 @@ pub struct Prepared {
     text: Vec<DrawText>,
     quads: Vec<PaintQuad>,
     cursor: Option<PaintQuad>,
-    images: Vec<AnyElement>,
+    images: Vec<(Bounds<Pixels>, Arc<RenderImage>)>,
 }
 pub struct Surface {
     pub workspace: Entity<Workspace>,
@@ -506,12 +538,22 @@ impl Element for Surface {
                     if image.contains("://") {
                         continue;
                     }
-                    let height = px(160.);
+                    let Some(bitmap) = load_image(&base.join(image)) else {
+                        continue;
+                    };
+                    // Aspect-fit the bitmap into the row: taller images are
+                    // capped at IMAGE_HEIGHT so they never cover later rows.
+                    let bitmap_size = bitmap.size(0);
+                    let ratio = bitmap_size.width.0 as f32 / bitmap_size.height.0 as f32;
+                    let mut height = IMAGE_HEIGHT;
+                    let mut width = height * ratio;
+                    if width > available {
+                        width = available;
+                        height = width / ratio;
+                    }
                     images.push((
-                        base.join(image),
-                        point(origin.x, y + row_height),
-                        available,
-                        height,
+                        Bounds::new(point(origin.x, y + row_height), size(width, height)),
+                        bitmap,
                     ));
                     row_height += height;
                 }
@@ -546,25 +588,7 @@ impl Element for Surface {
                 .update(cx, |app, _| app.tops[self.pane.index()] = row);
             return self.prepaint(None, None, bounds, &mut (), window, cx);
         }
-        for (path, origin, width, height) in images {
-            let mut image = img(path)
-                .w(width)
-                .h(height)
-                .object_fit(ObjectFit::Contain)
-                .with_fallback(|| {
-                    div()
-                        .size_full()
-                        .text_sm()
-                        .child("Image unavailable")
-                        .into_any_element()
-                })
-                .into_any_element();
-            image.layout_as_root(size(width.into(), height.into()), window, cx);
-            window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                image.prepaint_at(origin, window, cx)
-            });
-            result.images.push(image);
-        }
+        result.images = images;
         result
     }
     fn paint(
@@ -612,8 +636,8 @@ impl Element for Surface {
                     eprintln!("Text rendering: {error}");
                 }
             }
-            for image in &mut prepared.images {
-                image.paint(window, cx);
+            for (bounds, image) in prepared.images.drain(..) {
+                let _ = window.paint_image(bounds, Corners::default(), image, 0, false);
             }
             if focused && let Some(cursor) = prepared.cursor.take() {
                 window.paint_quad(cursor);

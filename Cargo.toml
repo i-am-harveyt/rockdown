@@ -9,11 +9,15 @@ license = "MIT"
 anyhow = "1"
 # Compile Metal shaders through the driver; no separate Xcode Metal toolchain needed.
 gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
+# Local preview images: decode once, paint as quads. Matches gpui's pinned version.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 libc = "0.2"
 mlua = { version = "0.11", features = ["lua54", "vendored", "serialize"] }
 portable-pty = "0.9"
 pulldown-cmark = "0.13"
 serde = { version = "1", features = ["derive"] }
+# Fenced-code highlighting with the compiled-in grammar and theme sets.
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 toml = "0.8"
 unicode-segmentation = "1"
 vt100 = "0.16"
