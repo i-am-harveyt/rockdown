@@ -38,7 +38,7 @@ fn named_key(key: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rockdown::{terminal::key_bytes, vim::Buffer};
+    use crate::{terminal::key_bytes, vim::Buffer};
 
     #[test]
     fn native_return_splits_editor_line_and_encodes_terminal_submit() {

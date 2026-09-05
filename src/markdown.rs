@@ -1,6 +1,6 @@
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockKind {
@@ -22,12 +22,23 @@ pub struct Span {
     pub link: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableRow {
+    pub start: usize,
+    pub end: usize,
+    pub header: bool,
+    pub separator: bool,
+    pub alignments: Arc<[Alignment]>,
+    pub cells: Vec<Vec<Span>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct RenderedLine {
     pub source_row: usize,
     pub kind: BlockKind,
     pub spans: Vec<Span>,
     pub images: Vec<String>,
+    pub table: Option<TableRow>,
 }
 
 #[derive(Default)]
@@ -42,6 +53,10 @@ struct Style {
 
 impl Style {
     fn append(&self, line: &mut RenderedLine, text: &str) {
+        self.append_spans(&mut line.spans, text);
+    }
+
+    fn append_spans(&self, spans: &mut Vec<Span>, text: &str) {
         if text.is_empty() {
             return;
         }
@@ -50,7 +65,7 @@ impl Style {
         let code = self.code > 0;
         let strike = self.strike > 0;
         let link = self.links.last();
-        if let Some(last) = line.spans.last_mut()
+        if let Some(last) = spans.last_mut()
             && last.bold == bold
             && last.italic == italic
             && last.code == code
@@ -59,7 +74,7 @@ impl Style {
         {
             last.text.push_str(text);
         } else {
-            line.spans.push(Span {
+            spans.push(Span {
                 text: text.to_owned(),
                 bold,
                 italic,
@@ -94,6 +109,7 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
             kind: BlockKind::Paragraph,
             spans: Vec::new(),
             images: Vec::new(),
+            table: None,
         })
         .collect();
     // Difference arrays classify nested containers in one final linear pass,
@@ -103,6 +119,8 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
     let mut style = Style::default();
     let mut containers = Vec::new();
     let mut ordinals: Vec<Option<u64>> = Vec::new();
+    let mut table_row = None;
+    let mut cell = None;
     let mut cell_index = 0usize;
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
@@ -148,15 +166,34 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
                 Tag::Link { dest_url, .. } => {
                     style.links.push(dest_url.into_string());
                 }
-                Tag::TableHead => {
-                    style.header += 1;
+                Tag::Table(alignments) => {
+                    let rows = covered_rows(&starts, &range);
+                    let alignments: Arc<[Alignment]> = alignments.into();
+                    for line in &mut lines[rows.clone()] {
+                        line.table = Some(TableRow {
+                            start: rows.start,
+                            end: rows.end,
+                            header: false,
+                            separator: true,
+                            alignments: Arc::clone(&alignments),
+                            cells: Vec::new(),
+                        });
+                    }
+                }
+                Tag::TableHead | Tag::TableRow => {
+                    let header = matches!(tag, Tag::TableHead);
+                    let table = lines[row].table.as_mut().expect("row belongs to a table");
+                    table.header = header;
+                    table.separator = false;
+                    table.cells.resize_with(table.alignments.len(), Vec::new);
+                    style.header += usize::from(header);
+                    table_row = Some(row);
                     cell_index = 0;
                 }
-                Tag::TableRow => cell_index = 0,
                 Tag::TableCell => {
-                    if cell_index > 0 {
-                        style.append(&mut lines[row], " │ ");
-                    }
+                    // Synthesized missing cells may point at the next physical
+                    // line. Their enclosing row, not that offset, owns them.
+                    cell = Some((table_row.expect("cell belongs to a table row"), cell_index));
                     cell_index += 1;
                 }
                 _ => {}
@@ -175,16 +212,23 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
                 TagEnd::Link | TagEnd::Image => {
                     style.links.pop();
                 }
-                TagEnd::TableHead => style.header -= 1,
+                TagEnd::TableCell => cell = None,
+                TagEnd::TableHead => {
+                    style.header -= 1;
+                    table_row = None;
+                }
+                TagEnd::TableRow => table_row = None,
                 _ => {}
             },
             Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
-                append_text(&mut lines, row, &text, &style);
+                append_text(&mut lines, row, &text, &style, cell);
             }
             Event::Code(text) => {
                 style.code += 1;
                 let raw = &source[range];
-                if raw.contains('\n') {
+                if cell.is_some() {
+                    append_text(&mut lines, row, &text, &style, cell);
+                } else if raw.contains('\n') {
                     append_multiline_code(&mut lines, row, raw, &containers, &style);
                 } else {
                     style.append(&mut lines[row], &text);
@@ -199,9 +243,11 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
             // would change the visual line ending and can leak inline styling.
             Event::SoftBreak | Event::HardBreak => {}
             Event::InlineMath(text) | Event::DisplayMath(text) => {
-                append_text(&mut lines, row, &text, &style);
+                append_text(&mut lines, row, &text, &style, cell);
             }
-            Event::FootnoteReference(label) => style.append(&mut lines[row], &label),
+            Event::FootnoteReference(label) => {
+                append_text(&mut lines, row, &label, &style, cell);
+            }
         }
     }
 
@@ -246,7 +292,18 @@ fn set_kind(lines: &mut [RenderedLine], starts: &[usize], range: &Range<usize>, 
     }
 }
 
-fn append_text(lines: &mut [RenderedLine], row: usize, text: &str, style: &Style) {
+fn append_text(
+    lines: &mut [RenderedLine],
+    row: usize,
+    text: &str,
+    style: &Style,
+    cell: Option<(usize, usize)>,
+) {
+    if let Some((row, column)) = cell {
+        let table = lines[row].table.as_mut().expect("cell belongs to a table");
+        style.append_spans(&mut table.cells[column], text);
+        return;
+    }
     // Block-code and HTML events can contain several lines. Other text events
     // (including decoded entities) normally occupy just one source line.
     for (offset, part) in text.split('\n').enumerate() {
@@ -367,6 +424,14 @@ mod tests {
         line.spans.iter().map(|span| span.text.as_str()).collect()
     }
 
+    fn cell_texts(table: &TableRow) -> Vec<String> {
+        table
+            .cells
+            .iter()
+            .map(|cell| cell.iter().map(|span| span.text.as_str()).collect())
+            .collect()
+    }
+
     #[test]
     fn multiline_styles_keep_unicode_and_physical_rows() {
         let lines = project("**hé *世界*\nencore**\n\n");
@@ -429,11 +494,25 @@ mod tests {
         let lines = project(
             "| name | value |\n| --- | --- |\n| [**A**](https://a.test) | &amp; |\n\n![*alt*](image.png)\n",
         );
-        assert_eq!(text(&lines[0]), "name │ value");
-        assert!(lines[0].spans.iter().all(|span| span.bold));
-        assert!(lines[1].spans.is_empty());
-        assert_eq!(text(&lines[2]), "A │ &");
-        let link = &lines[2].spans[0];
+        let header = lines[0].table.as_ref().unwrap();
+        assert_eq!(cell_texts(header), ["name", "value"]);
+        assert!(header.header);
+        assert!(header.cells.iter().flatten().all(|span| span.bold));
+        let separator = lines[1].table.as_ref().unwrap();
+        assert!(separator.separator);
+        assert!(!separator.header);
+        assert!(separator.cells.is_empty());
+        let body = lines[2].table.as_ref().unwrap();
+        assert_eq!(cell_texts(body), ["A", "&"]);
+        assert!(!body.header);
+        assert!(!body.separator);
+        for line in &lines[..3] {
+            let table = line.table.as_ref().unwrap();
+            assert_eq!((table.start, table.end), (0, 3));
+            assert!(line.spans.is_empty());
+        }
+        assert!(lines[3..].iter().all(|line| line.table.is_none()));
+        let link = &body.cells[0][0];
         assert!(link.bold);
         assert_eq!(link.link.as_deref(), Some("https://a.test"));
         assert!(lines[3].spans.is_empty());
@@ -441,5 +520,95 @@ mod tests {
         assert!(lines[4].spans[0].italic);
         assert_eq!(lines[4].spans[0].link.as_deref(), Some("image.png"));
         assert!(lines[5].spans.is_empty());
+    }
+
+    #[test]
+    fn table_cells_preserve_parser_escaping_alignment_and_inline_styles() {
+        let lines = project(
+            "| left | center | right | plain |\n\
+             | :--- | :---: | ---: | --- |\n\
+             | hé\\|世界 | `a\\|b` | &vert; &amp; | [*é*](https://a.test) ~~old~~ |\n",
+        );
+        let table = lines[2].table.as_ref().unwrap();
+        assert_eq!(
+            table.alignments.as_ref(),
+            [
+                Alignment::Left,
+                Alignment::Center,
+                Alignment::Right,
+                Alignment::None
+            ]
+        );
+        assert_eq!(cell_texts(table), ["hé|世界", "a|b", "| &", "é old"]);
+        assert!(table.cells[1][0].code);
+        assert!(table.cells[3][0].italic);
+        assert_eq!(table.cells[3][0].link.as_deref(), Some("https://a.test"));
+        assert!(
+            table.cells[3]
+                .iter()
+                .any(|span| span.text == "old" && span.strike)
+        );
+        assert!(table.cells.iter().flatten().all(|span| !span.bold));
+    }
+
+    #[test]
+    fn missing_table_cells_stay_on_their_enclosing_source_row() {
+        let lines = project(
+            "| a | b | c |\n| --- | --- | --- |\n| | x |\n| only |\n| 1 | 2 | 3 | ignored |\n\nprose",
+        );
+        assert_eq!(cell_texts(lines[2].table.as_ref().unwrap()), ["", "x", ""]);
+        assert_eq!(
+            cell_texts(lines[3].table.as_ref().unwrap()),
+            ["only", "", ""]
+        );
+        assert_eq!(
+            cell_texts(lines[4].table.as_ref().unwrap()),
+            ["1", "2", "3"]
+        );
+        assert!(lines[5].table.is_none());
+        assert!(lines[6].table.is_none());
+        assert_eq!(text(&lines[6]), "prose");
+        assert_eq!(
+            lines.iter().map(|line| line.source_row).collect::<Vec<_>>(),
+            (0..7).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn quoted_crlf_tables_and_neighboring_tables_keep_distinct_ranges() {
+        let lines = project(
+            "> | hé | value |\r\n> | :--- | ---: |\r\n> | 世界 | |\r\n\r\n\
+             | next | table |\r\n| --- | :---: |\r\n\r\nfollowing\r\n",
+        );
+        for line in &lines[..3] {
+            let table = line.table.as_ref().unwrap();
+            assert_eq!((table.start, table.end), (0, 3));
+            assert_eq!(line.kind, BlockKind::Quote);
+        }
+        assert_eq!(cell_texts(lines[2].table.as_ref().unwrap()), ["世界", ""]);
+        assert!(lines[3].table.is_none());
+        for line in &lines[4..6] {
+            let table = line.table.as_ref().unwrap();
+            assert_eq!((table.start, table.end), (4, 6));
+            assert_eq!(
+                table.alignments.as_ref(),
+                [Alignment::None, Alignment::Center]
+            );
+        }
+        assert!(lines[5].table.as_ref().unwrap().separator);
+        assert!(lines[6..].iter().all(|line| line.table.is_none()));
+        assert_eq!(text(&lines[7]), "following");
+        assert_eq!(lines.len(), 9);
+    }
+
+    #[test]
+    fn header_only_table_at_eof_includes_its_delimiter() {
+        let lines = project("| heading |\n| --- |");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(cell_texts(lines[0].table.as_ref().unwrap()), ["heading"]);
+        let separator = lines[1].table.as_ref().unwrap();
+        assert_eq!((separator.start, separator.end), (0, 2));
+        assert!(separator.separator);
+        assert!(separator.cells.is_empty());
     }
 }

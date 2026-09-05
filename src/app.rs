@@ -1,7 +1,5 @@
 use crate::surface::{Surface, SurfaceLayout};
-use anyhow::{Result, bail};
-use gpui::{prelude::*, *};
-use rockdown::{
+use crate::{
     config::{Config, parse_color},
     document::Document,
     explorer::Explorer,
@@ -9,6 +7,8 @@ use rockdown::{
     terminal::{Terminal, key_bytes},
     vim::{Buffer, Mode},
 };
+use anyhow::{Result, bail};
+use gpui::{prelude::*, *};
 use std::{
     ops::Range,
     path::{Path, PathBuf},
@@ -17,7 +17,7 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Pane {
+pub enum Pane {
     Editor,
     Explorer,
     Terminal,
@@ -32,10 +32,10 @@ impl Pane {
     }
 }
 
-pub(crate) struct Workspace {
+pub struct Workspace {
     pub config: Config,
     pub config_path: Option<PathBuf>,
-    pub documents: rockdown::documents::Documents,
+    pub documents: crate::documents::Documents,
     pub explorer: Explorer,
     pub explorer_visible: bool,
     explorer_resize: Option<(Pixels, f32)>,
@@ -73,7 +73,7 @@ impl Workspace {
         Self {
             config,
             config_path,
-            documents: rockdown::documents::Documents::new(document),
+            documents: crate::documents::Documents::new(document),
             explorer,
             explorer_visible: true,
             explorer_resize: None,
@@ -121,12 +121,12 @@ impl Workspace {
     }
     fn change_document(
         &mut self,
-        change: impl FnOnce(&mut rockdown::documents::Documents) -> Result<()>,
+        change: impl FnOnce(&mut crate::documents::Documents) -> Result<()>,
         cx: &mut Context<Self>,
     ) -> Result<()> {
         let editor = Pane::Editor.index();
         let previous = self.documents.active_id();
-        *self.documents.viewport_mut() = rockdown::documents::Viewport {
+        *self.documents.viewport_mut() = crate::documents::Viewport {
             top: self.tops[editor],
             offset: self.scroll_offsets[editor],
         };
@@ -186,7 +186,7 @@ impl Workspace {
         let max = (f32::from(window.viewport_size().width) - 320.).clamp(0., 600.);
         width.clamp(180_f32.min(max), max)
     }
-    pub(crate) fn start_explorer_resize(
+    pub fn start_explorer_resize(
         &mut self,
         event: &MouseDownEvent,
         window: &mut Window,
@@ -196,7 +196,7 @@ impl Workspace {
         cx.stop_propagation();
         cx.notify();
     }
-    pub(crate) fn resize_explorer(
+    pub fn resize_explorer(
         &mut self,
         event: &MouseMoveEvent,
         window: &mut Window,
@@ -213,7 +213,7 @@ impl Workspace {
             Self::clamp_explorer_width(start_width + f32::from(start_x - event.position.x), window);
         cx.notify();
     }
-    pub(crate) fn stop_explorer_resize(&mut self, cx: &mut Context<Self>) {
+    pub fn stop_explorer_resize(&mut self, cx: &mut Context<Self>) {
         if self.explorer_resize.take().is_some() {
             cx.notify();
         }
@@ -673,8 +673,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let layout = &self.layouts[pane.index()];
-        let hit = layout.rows.iter().find(|row| {
+        eprintln!(
+            "MOUSE_DOWN at={:?} rows={}",
+            event.position,
+            self.layouts[pane.index()].rows.len()
+        );
+        for row in &self.layouts[pane.index()].rows {
+            eprintln!(
+                "  HITROW {} origin_y={:?} h={:?}",
+                row.source_row, row.origin.y, row.height
+            );
+        }
+        let hit = self.layouts[pane.index()].rows.iter().find(|row| {
             event.position.y >= row.origin.y && event.position.y < row.origin.y + row.height
         });
         let location = hit.map(|row| {

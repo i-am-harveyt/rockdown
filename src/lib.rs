@@ -1,7 +1,10 @@
+pub mod app;
 pub mod config;
 pub mod document;
 pub mod documents;
 pub mod explorer;
+pub mod keyboard;
 pub mod markdown;
+pub mod surface;
 pub mod terminal;
 pub mod vim;

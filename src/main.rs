@@ -1,7 +1,3 @@
-mod app;
-mod keyboard;
-mod surface;
-
 use anyhow::{Context, Result, bail};
 use gpui::{prelude::*, *};
 use rockdown::{config::Config, document::Document, explorer::Explorer};
@@ -89,7 +85,14 @@ fn run() -> Result<()> {
             },
             move |window, cx| {
                 let workspace = cx.new(|cx| {
-                    app::Workspace::new(config, config_path, document, explorer, window, cx)
+                    rockdown::app::Workspace::new(
+                        config,
+                        config_path,
+                        document,
+                        explorer,
+                        window,
+                        cx,
+                    )
                 });
                 let weak = workspace.downgrade();
                 window.on_window_should_close(cx, move |_, cx| {
