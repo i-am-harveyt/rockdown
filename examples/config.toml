@@ -1,0 +1,31 @@
+# Copy to ~/.config/rockdown/config.toml, or pass --config PATH.
+font_family = "Menlo"
+font_size = 15
+line_height = 30
+explorer_width = 290
+terminal_height = 240
+# Toggle the right dock with Ctrl-E; drag its left edge to resize.
+# shell = "/bin/zsh" # Defaults to $SHELL, then /bin/sh.
+
+[theme]
+background = "#171b22"
+panel = "#1e242e"
+foreground = "#dce3ec"
+muted = "#8995a7"
+accent = "#9cc7b5"
+
+# Specifying keys replaces the default shortcut map.
+# Supported actions: save, explorer (toggle), terminal, editor, help,
+# buffer-delete, previous-buffer, next-buffer.
+[keys]
+cmd-s = "save"
+ctrl-s = "save"
+cmd-e = "explorer"
+ctrl-e = "explorer"
+"ctrl-`" = "terminal"
+cmd-1 = "editor"
+ctrl-pageup = "previous-buffer"
+ctrl-pagedown = "next-buffer"
+cmd-w = "buffer-delete"
+ctrl-shift-w = "buffer-delete"
+f1 = "help"
