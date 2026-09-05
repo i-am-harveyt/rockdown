@@ -197,3 +197,38 @@ fn narrow_viewport_wraps_cells_and_keeps_shared_column_widths(cx: &mut TestAppCo
     let scrolled = hit_rows(&mut window, &view);
     assert_eq!(scrolled[3].1, narrow_heights[3].1);
 }
+
+#[gpui::test]
+fn large_image_is_downscaled_and_renders_proportionally(cx: &mut TestAppContext) {
+    let sandbox = tempfile::tempdir().unwrap();
+    let directory = sandbox.path().to_path_buf();
+    // 2400x1200 image (2:1 aspect ratio)
+    let img = image::RgbImage::new(2400, 1200);
+    img.save(directory.join("large.png")).unwrap();
+
+    let (view, window) = cx.add_window_view(|window, cx| {
+        Workspace::new(
+            Config::default(),
+            None,
+            Document::untitled("before\n![](large.png)\nafter\n"),
+            Explorer::open(&directory).unwrap(),
+            window,
+            cx,
+        )
+    });
+    let mut window = window.clone();
+    window.run_until_parked();
+
+    let rows = window.update(|_, cx| {
+        view.read(cx).layouts[Pane::Editor.index()]
+            .rows
+            .iter()
+            .map(|row| (row.source_row, f32::from(row.origin.y), f32::from(row.height)))
+            .collect::<Vec<_>>()
+    });
+    let image_row = rows.iter().find(|(row, _, _)| *row == 1).unwrap();
+    let after = rows.iter().find(|(row, _, _)| *row == 2).unwrap();
+    assert!(image_row.2 > 100.0);
+    assert!((after.1 - (image_row.1 + image_row.2)).abs() < 0.5);
+}
+

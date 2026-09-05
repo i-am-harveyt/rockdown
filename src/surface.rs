@@ -6,7 +6,7 @@ use crate::{
 use gpui::{prelude::*, *};
 use pulldown_cmark::Alignment;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex},
 };
@@ -15,29 +15,98 @@ use std::{
 /// image with the title syntax `![alt](path "40%")` or `"320px"`.
 const DEFAULT_IMAGE_WIDTH: f32 = 0.6;
 
+/// Maximum pixel dimension for inline preview images. Downscales large camera/phone
+/// photos (e.g. 24–48MP) to fit high-DPI displays without allocating hundreds of megabytes
+/// of uncompressed pixel buffers and Metal textures.
+const MAX_PREVIEW_DIMENSION: u32 = 1600;
+
+/// Maximum number of decoded image bitmaps retained in memory simultaneously.
+const MAX_CACHED_IMAGES: usize = 24;
+
+struct ImageCache {
+    entries: HashMap<PathBuf, Option<Arc<RenderImage>>>,
+    lru: VecDeque<PathBuf>,
+}
+
+impl ImageCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            lru: VecDeque::new(),
+        }
+    }
+
+    fn get(&mut self, path: &Path) -> Option<Option<Arc<RenderImage>>> {
+        if let Some(image) = self.entries.get(path) {
+            if let Some(pos) = self.lru.iter().position(|p| p == path) {
+                self.lru.remove(pos);
+            }
+            self.lru.push_back(path.to_path_buf());
+            Some(image.clone())
+        } else {
+            None
+        }
+    }
+
+    fn insert(&mut self, path: PathBuf, image: Option<Arc<RenderImage>>) {
+        if self.entries.contains_key(&path) {
+            if let Some(pos) = self.lru.iter().position(|p| p == &path) {
+                self.lru.remove(pos);
+            }
+        } else {
+            while self.lru.len() >= MAX_CACHED_IMAGES {
+                if let Some(oldest) = self.lru.pop_front() {
+                    self.entries.remove(&oldest);
+                }
+            }
+        }
+        self.lru.push_back(path.clone());
+        self.entries.insert(path, image);
+    }
+}
+
 // Decoded bitmaps by path. Layout positions are computed by the renderer, so
 // an image can never escape its row and paint over following content; the
 // cache only saves repeated decoding of the same file.
-static IMAGES: LazyLock<Mutex<HashMap<PathBuf, Option<Arc<RenderImage>>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static IMAGES: LazyLock<Mutex<ImageCache>> = LazyLock::new(|| Mutex::new(ImageCache::new()));
 
 fn load_image(path: &Path) -> Option<Arc<RenderImage>> {
     let mut cache = IMAGES.lock().ok()?;
-    if !cache.contains_key(path) {
-        let decoded = std::fs::read(path)
-            .ok()
-            .and_then(|bytes| image::load_from_memory(&bytes).ok())
-            .map(|image| {
-                let mut rgba = image.into_rgba8();
-                // The sprite atlas expects BGRA bytes.
-                for pixel in rgba.as_chunks_mut::<4>().0 {
-                    pixel.swap(0, 2);
-                }
-                Arc::new(RenderImage::new(vec![image::Frame::new(rgba)]))
-            });
-        cache.insert(path.to_path_buf(), decoded);
+    if let Some(cached) = cache.get(path) {
+        return cached;
     }
-    cache.get(path).cloned().flatten()
+    let decoded = std::fs::File::open(path)
+        .ok()
+        .and_then(|file| {
+            let reader = std::io::BufReader::new(file);
+            image::ImageReader::new(reader)
+                .with_guessed_format()
+                .ok()?
+                .decode()
+                .ok()
+        })
+        .or_else(|| {
+            std::fs::read(path)
+                .ok()
+                .and_then(|bytes| image::load_from_memory(&bytes).ok())
+        })
+        .map(|image| {
+            let image = if image.width() > MAX_PREVIEW_DIMENSION
+                || image.height() > MAX_PREVIEW_DIMENSION
+            {
+                image.thumbnail(MAX_PREVIEW_DIMENSION, MAX_PREVIEW_DIMENSION)
+            } else {
+                image
+            };
+            let mut rgba = image.into_rgba8();
+            // The sprite atlas expects BGRA bytes.
+            for pixel in rgba.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+            Arc::new(RenderImage::new(vec![image::Frame::new(rgba)]))
+        });
+    cache.insert(path.to_path_buf(), decoded.clone());
+    decoded
 }
 
 #[derive(Default)]

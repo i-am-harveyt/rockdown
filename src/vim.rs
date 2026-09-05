@@ -40,6 +40,9 @@ enum Pending {
     OperatorG(char, usize),
 }
 
+/// Upper bound on historical undo/redo snapshots to prevent unbounded heap growth.
+const MAX_UNDO_DEPTH: usize = 100;
+
 /// UTF-8 byte columns always point to a grapheme boundary. Existing line identities
 /// survive text edits and splits; newly inserted or pasted lines get fresh IDs.
 pub struct Buffer {
@@ -182,6 +185,20 @@ impl Buffer {
         self.saved_text = self.text();
     }
 
+    fn push_undo(&mut self, snapshot: Snapshot) {
+        if self.undo_stack.len() >= MAX_UNDO_DEPTH {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(snapshot);
+    }
+
+    fn push_redo(&mut self, snapshot: Snapshot) {
+        if self.redo_stack.len() >= MAX_UNDO_DEPTH {
+            self.redo_stack.remove(0);
+        }
+        self.redo_stack.push(snapshot);
+    }
+
     pub fn undo(&mut self) {
         self.finish_insert();
         self.reset_command();
@@ -190,7 +207,7 @@ impl Buffer {
         if let Some(previous) = self.undo_stack.pop() {
             let current = self.snapshot();
             self.restore(previous);
-            self.redo_stack.push(current);
+            self.push_redo(current);
         }
         self.clamp();
     }
@@ -203,7 +220,7 @@ impl Buffer {
         if let Some(next) = self.redo_stack.pop() {
             let current = self.snapshot();
             self.restore(next);
-            self.undo_stack.push(current);
+            self.push_undo(current);
         }
         self.clamp();
     }
@@ -1008,7 +1025,7 @@ impl Buffer {
 
     fn record(&mut self, before: Snapshot) {
         if before.lines != self.lines {
-            self.undo_stack.push(before);
+            self.push_undo(before);
             self.redo_stack.clear();
         }
     }
@@ -1250,4 +1267,19 @@ mod tests {
         keys(&mut buffer, &["delete"]);
         assert_eq!(buffer.lines[0].text, "βγ");
     }
+
+    #[test]
+    fn undo_stack_is_bounded() {
+        let mut buffer = Buffer::new("start");
+        for _ in 0..150 {
+            keys(&mut buffer, &["o", "x", "escape"]);
+        }
+        assert_eq!(buffer.undo_stack.len(), MAX_UNDO_DEPTH);
+        for _ in 0..MAX_UNDO_DEPTH {
+            buffer.undo();
+        }
+        assert_eq!(buffer.undo_stack.len(), 0);
+        assert_eq!(buffer.redo_stack.len(), MAX_UNDO_DEPTH);
+    }
 }
+
