@@ -97,6 +97,13 @@ struct SpanStyle {
     panel: Hsla,
 }
 
+/// Parse a `#rrggbb` color from the syntax highlighter into a render color.
+fn parse_hex(hex: &str) -> Option<Hsla> {
+    crate::config::parse_color(hex)
+        .ok()
+        .map(|value| rgb(value).into())
+}
+
 impl SpanStyle {
     fn text(&self, spans: &[Span]) -> (String, Vec<TextRun>) {
         let mut text = String::new();
@@ -118,7 +125,13 @@ impl SpanStyle {
             if span.italic {
                 style.font.style = FontStyle::Italic;
             }
-            if span.code {
+            if let Some(hex) = &span.color {
+                // Highlighted spans carry their own foreground; the block's
+                // background quad already provides the panel tint.
+                if let Some(tint) = parse_hex(hex) {
+                    style.color = tint;
+                }
+            } else if span.code {
                 style.background_color = Some(self.panel);
                 style.color = self.accent;
             }
@@ -399,44 +412,9 @@ impl Element for Surface {
                     )),
                     _ => {}
                 }
-                let mut text = String::new();
-                for span in &projection.spans {
-                    text.push_str(&span.text);
-                    let mut style = run(
-                        &span.text,
-                        font.clone(),
-                        if span.link.is_some() {
-                            accent
-                        } else {
-                            foreground
-                        },
-                    );
-                    if span.bold {
-                        style.font.weight = FontWeight::BOLD;
-                    }
-                    if span.italic {
-                        style.font.style = FontStyle::Italic;
-                    }
-                    if span.code {
-                        style.background_color = Some(panel);
-                        style.color = accent;
-                    }
-                    if span.link.is_some() {
-                        style.underline = Some(UnderlineStyle {
-                            thickness: px(1.),
-                            color: Some(accent),
-                            wavy: false,
-                        });
-                    }
-                    if span.strike {
-                        style.strikethrough = Some(StrikethroughStyle {
-                            thickness: px(1.),
-                            color: Some(muted),
-                        });
-                    }
-                    runs.push(style);
-                }
-                text
+                let (built, span_runs) = style.text(&projection.spans);
+                runs = span_runs;
+                built
             };
             let line = window
                 .text_system()

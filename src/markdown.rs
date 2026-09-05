@@ -1,6 +1,68 @@
-use std::{ops::Range, sync::Arc};
+use std::{
+    ops::Range,
+    sync::{Arc, LazyLock},
+};
 
-use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use syntect::{
+    easy::HighlightLines,
+    highlighting::{FontStyle as SyntaxFontStyle, ThemeSet},
+    parsing::SyntaxSet,
+};
+
+// Compiled syntax engine shared by every refresh: the grammar set and the
+// theme used for fenced code blocks.
+static HIGHLIGHTER: LazyLock<(SyntaxSet, ThemeSet)> = LazyLock::new(|| {
+    (
+        SyntaxSet::load_defaults_newlines(),
+        ThemeSet::load_defaults(),
+    )
+});
+
+const THEME_NAME: &str = "base16-ocean.dark";
+
+/// Render one syntect color as the hex form the renderer's style table parses.
+fn foreground_hex(color: syntect::highlighting::Color) -> String {
+    format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
+}
+
+/// Append one code-block text chunk as syntax-highlighted spans. Pulldown
+/// delivers the fenced body through plain Text events, so the highlighter is
+/// created at the opening fence and fed line by line until the closer.
+fn append_highlighted(
+    lines: &mut [RenderedLine],
+    row: usize,
+    text: &str,
+    highlighter: &mut HighlightLines,
+) {
+    let (syntaxes, _) = &*HIGHLIGHTER;
+    for (offset, part) in text.split_inclusive('\n').enumerate() {
+        let Some(target) = lines.get_mut(row + offset) else {
+            break;
+        };
+        let regions = highlighter
+            .highlight_line(part, syntaxes)
+            .unwrap_or_default();
+        for (style, fragment) in regions {
+            // Keep the newline for the highlighter's line-based grammars, but
+            // store spans without it: a physical row never contains a break.
+            let text = fragment.strip_suffix('\n').unwrap_or(fragment);
+            let text = text.strip_suffix('\r').unwrap_or(text);
+            if text.is_empty() {
+                continue;
+            }
+            target.spans.push(Span {
+                text: text.to_owned(),
+                bold: style.font_style.contains(SyntaxFontStyle::BOLD),
+                italic: style.font_style.contains(SyntaxFontStyle::ITALIC),
+                code: true,
+                strike: false,
+                link: None,
+                color: Some(foreground_hex(style.foreground)),
+            });
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockKind {
@@ -20,6 +82,9 @@ pub struct Span {
     pub code: bool,
     pub strike: bool,
     pub link: Option<String>,
+    /// Highlighted foreground color as `#rrggbb`, when a fence names a known
+    /// language. `None` keeps the renderer's default styling.
+    pub color: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,6 +136,7 @@ impl Style {
             && last.code == code
             && last.strike == strike
             && last.link.as_ref() == link
+            && last.color.is_none()
         {
             last.text.push_str(text);
         } else {
@@ -81,6 +147,7 @@ impl Style {
                 code,
                 strike,
                 link: link.cloned(),
+                color: None,
             });
         }
     }
@@ -122,6 +189,7 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
     let mut table_row = None;
     let mut cell = None;
     let mut cell_index = 0usize;
+    let mut code_highlighter: Option<HighlightLines<'static>> = None;
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
 
@@ -136,9 +204,21 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
                     cover(&mut quotes, &starts, &range);
                     containers.push(Container::Quote);
                 }
-                Tag::CodeBlock(_) => {
+                Tag::CodeBlock(kind) => {
                     set_kind(&mut lines, &starts, &range, BlockKind::Code);
                     style.code += 1;
+                    // The fence info's first word is the language token. Unknown
+                    // tokens highlight as plain text, preserving code styling.
+                    let token = match &kind {
+                        CodeBlockKind::Fenced(info) => info.split_whitespace().next().unwrap_or(""),
+                        CodeBlockKind::Indented => "",
+                    };
+                    let (syntaxes, themes) = &*HIGHLIGHTER;
+                    let syntax = syntaxes
+                        .find_syntax_by_token(token)
+                        .unwrap_or_else(|| syntaxes.find_syntax_plain_text());
+                    code_highlighter =
+                        Some(HighlightLines::new(syntax, &themes.themes[THEME_NAME]));
                 }
                 Tag::List(first) => {
                     cover(&mut lists, &starts, &range);
@@ -199,7 +279,10 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
                 _ => {}
             },
             Event::End(tag) => match tag {
-                TagEnd::CodeBlock => style.code -= 1,
+                TagEnd::CodeBlock => {
+                    style.code -= 1;
+                    code_highlighter = None;
+                }
                 TagEnd::BlockQuote(_) | TagEnd::Item => {
                     containers.pop();
                 }
@@ -221,7 +304,11 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
                 _ => {}
             },
             Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
-                append_text(&mut lines, row, &text, &style, cell);
+                if let Some(highlighter) = code_highlighter.as_mut() {
+                    append_highlighted(&mut lines, row, &text, highlighter);
+                } else {
+                    append_text(&mut lines, row, &text, &style, cell);
+                }
             }
             Event::Code(text) => {
                 style.code += 1;
@@ -468,6 +555,41 @@ mod tests {
         assert_eq!(text(&lines[5]), "after");
         assert_eq!(lines[5].kind, BlockKind::Paragraph);
         assert!(lines[6].spans.is_empty());
+    }
+
+    #[test]
+    fn fenced_code_is_highlighted_with_colors_and_no_line_breaks() {
+        let lines = project("```rust\nfn main() {\n    let x = 1;\n}\n```\nprose\n");
+        // Fence lines stay empty; body rows carry highlighted spans.
+        assert!(lines[0].spans.is_empty());
+        assert_eq!(text(&lines[1]), "fn main() {");
+        assert_eq!(text(&lines[2]), "    let x = 1;");
+        assert!(lines[4].spans.is_empty());
+        assert_eq!(text(&lines[5]), "prose");
+        for line in &lines[1..4] {
+            assert!(!line.spans.is_empty(), "body row must have spans");
+            for span in &line.spans {
+                assert!(span.code);
+                let hex = span.color.as_deref().expect("highlighted color");
+                assert_eq!(hex.len(), 7);
+                assert!(span.text.lines().count() <= 1, "no breaks in spans");
+            }
+        }
+        // A keyword and a plain identifier highlight differently.
+        let colors: Vec<_> = lines[1]
+            .spans
+            .iter()
+            .filter_map(|s| s.color.as_deref())
+            .collect();
+        assert!(colors.windows(2).any(|pair| pair[0] != pair[1]));
+    }
+
+    #[test]
+    fn unknown_fence_language_highlights_as_plain_text() {
+        let lines = project("```\nplain body\n```\n");
+        assert_eq!(text(&lines[1]), "plain body");
+        assert!(lines[1].spans.iter().all(|span| span.code));
+        assert!(lines[1].spans.iter().all(|span| span.color.is_some()));
     }
 
     #[test]
