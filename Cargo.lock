@@ -4617,6 +4617,7 @@ dependencies = [
  "mlua",
  "portable-pty",
  "pulldown-cmark",
+ "regex",
  "serde",
  "syntect",
  "tempfile",

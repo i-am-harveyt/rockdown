@@ -40,6 +40,57 @@ fn hit_rows(window: &mut VisualTestContext, view: &gpui::Entity<Workspace>) -> V
 }
 
 #[gpui::test]
+fn viewport_alignment_centers_wrapped_rows_and_top_aligns_without_moving_cursor(
+    cx: &mut TestAppContext,
+) {
+    let (mut window, view) = table_window(cx);
+    let set_document = |window: &mut VisualTestContext, wrapped: bool| {
+        window.update(|_, cx| {
+            view.update(cx, |app, cx| {
+                let text = (0..70)
+                    .map(|row| {
+                        if wrapped && row != 39 {
+                            "wrapped words ".repeat(40)
+                        } else {
+                            format!("line {row}")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                app.documents.current_mut().buffer.set_text(&text);
+                app.refresh_projection();
+                cx.notify();
+            })
+        });
+        window.simulate_keystrokes("4 0 shift-g z z");
+        window.run_until_parked();
+    };
+    let cursor_y = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            let app = view.read(cx);
+            assert_eq!(app.documents.current().buffer.row, 39);
+            f32::from(
+                app.layouts[Pane::Editor.index()]
+                    .rows
+                    .iter()
+                    .find(|row| row.source_row == 39)
+                    .unwrap()
+                    .origin
+                    .y,
+            )
+        })
+    };
+    set_document(&mut window, false);
+    let centered = cursor_y(&mut window);
+    set_document(&mut window, true);
+    assert!((cursor_y(&mut window) - centered).abs() < 1.);
+    window.simulate_keystrokes("z t");
+    window.run_until_parked();
+    assert!(cursor_y(&mut window) < centered);
+    assert_eq!(hit_rows(&mut window, &view)[0].0, 39);
+}
+
+#[gpui::test]
 fn cmd_v_pastes_clipboard_into_the_editor(cx: &mut TestAppContext) {
     let (mut window, view) = table_window(cx);
     cx.write_to_clipboard(ClipboardItem::new_string("pasted text".into()));

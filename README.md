@@ -105,6 +105,8 @@ You can also click a pane to focus it. **Terminal** is at the bottom-left; **Hid
 | `w`, `b`, `e` | Move by words. |
 | `0`, `$` | Move to the beginning/end of the line. |
 | `gg`, `G` | Move to the beginning/end of the document. |
+| `Ctrl-D`, `Ctrl-U` | Move cursor and viewport down/up by half a pane. A count sets the number of lines for subsequent half-page motions in that buffer. |
+| `zz`, `zt` | Center the current line or place it at the top without moving the cursor. A count first selects that line, e.g. `40zz`. |
 | `x`, `dd`, `dw`, `d$` | Delete a character, line, word, or through the end of the line. |
 | `cc`, `cw` | Change a line or word and enter Insert mode. |
 | `yy`, `p`, `P` | Yank a line; paste after/before the cursor. |
@@ -117,6 +119,22 @@ Counts work with supported motions and operators, such as `3j` or `2dd`. In Visu
 The editor and file explorer share the **system clipboard** for Vim operations: `y`/`yy` copy text, and `p`/`P` paste the current clipboard after/before the cursor. This also works across buffers and after explorer navigation or refresh. Linewise yanks paste as whole lines; characterwise yanks stay inline. Text copied from another application replaces the previous yank. As with Vim's unnamed register, delete/change operations also copy the removed text. Explorer yanks copy the displayed filename, not the file's contents.
 
 **Return behavior:** in Insert mode, Return splits the line at the caret and moves the cursor to the new line. In Normal mode, it opens a line below and enters Insert mode. In the command line, Return executes the command.
+
+### Whole-buffer substitution
+
+From Normal mode, use `:%s/pattern/replacement/flags` in the editor or file explorer:
+
+```vim
+:%s/old/new/          " First match on each line
+:%s/old/new/g         " All matches on each line
+:%s/old/new/gi        " All matches, ignoring case
+:%s#old/path#new/path#g
+:%s/(word)/[\1]/g     " Capture references; & inserts the whole match
+```
+
+The comments above explain the examples; do not include them in the command. Patterns use **Rust regex syntax** (for example, `(group)`, `\d+`, and `^`/`$`), not Vim's regex dialect. Matching is per physical line. `g` replaces all matches per line; `i` ignores case, and `I` forces case-sensitive matching. Escape a delimiter with `\`; use `\&` for a literal ampersand, `\\` for a backslash, and `\r` or `\n` to insert a newline. The final delimiter is optional when no flags are supplied.
+
+One `u` undoes the entire substitution; `Ctrl-R` redoes it. Invalid patterns, unsupported flags (including interactive `c` confirmation), and missing matches report an error without changing the buffer. An empty pattern is rejected rather than reusing a previous search. In the explorer, replacements stage filename edits; `:w` commits them with the usual safety checks.
 
 ### Saving, opening, and quitting
 

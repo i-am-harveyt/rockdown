@@ -382,265 +382,285 @@ impl Element for Surface {
         if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
             return Prepared::default();
         }
-        let mut result = Prepared::default();
-        let line_height = self.workspace.read(cx).config.line_height;
-        let visible = (f32::from(bounds.size.height) / line_height)
-            .floor()
-            .max(1.) as usize;
-        self.workspace
-            .update(cx, |app, _| app.ensure_cursor_visible(self.pane, visible));
-        if self.pane == Pane::Terminal {
-            self.terminal(bounds, window, cx, &mut result);
-            return result;
-        }
-        let app = self.workspace.read(cx);
-        let foreground = app.color(&app.config.theme.foreground);
-        let muted = app.color(&app.config.theme.muted);
-        let accent = app.color(&app.config.theme.accent);
-        let panel = app.color(&app.config.theme.panel);
-        let font = font(app.config.font_family.clone());
-        let buffer = if self.pane == Pane::Editor {
-            &app.documents.current().buffer
-        } else {
-            &app.explorer.buffer
-        };
-        let top = app.tops[self.pane.index()];
-        let gutter = if self.pane == Pane::Editor { 56. } else { 16. };
-        let available = (bounds.size.width - px(gutter + 24.)).max(px(1.));
-        let style = SpanStyle {
-            font: font.clone(),
-            font_size: px(app.config.font_size),
-            foreground,
-            muted,
-            accent,
-            panel,
-        };
-        let mut tables: HashMap<usize, TableLayout> = HashMap::new();
-        let mut y = bounds.top() - px(app.scroll_offsets[self.pane.index()]);
-        let mut images = Vec::new();
-        for source_row in top..(top + visible + 1).min(buffer.lines.len()) {
-            let active = source_row == buffer.row && app.pane == self.pane;
-            let raw = active
-                || self.pane == Pane::Explorer
-                || buffer.selected_range(source_row).is_some();
-            if y >= bounds.bottom() {
-                break;
+        loop {
+            let mut result = Prepared::default();
+            let line_height = self.workspace.read(cx).config.line_height;
+            let visible = (f32::from(bounds.size.height) / line_height)
+                .floor()
+                .max(1.) as usize;
+            self.workspace.update(cx, |app, _| {
+                app.ensure_cursor_visible(self.pane, f32::from(bounds.size.height))
+            });
+            if self.pane == Pane::Terminal {
+                self.terminal(bounds, window, cx, &mut result);
+                return result;
             }
-            if !raw && let Some(table) = app.projection[source_row].table.as_ref() {
-                y += self.table_row(
-                    app,
-                    source_row,
-                    table,
-                    y,
-                    bounds,
-                    gutter,
-                    available,
-                    line_height,
-                    &mut tables,
-                    &style,
-                    &mut result,
-                    window,
-                );
-                continue;
-            }
-            let mut font_size = app.config.font_size;
-            let mut runs = Vec::new();
-            let text = if raw {
-                let text = buffer.lines[source_row].text.clone();
-                runs.push(run(&text, font.clone(), foreground));
-                text
+            let app = self.workspace.read(cx);
+            let foreground = app.color(&app.config.theme.foreground);
+            let muted = app.color(&app.config.theme.muted);
+            let accent = app.color(&app.config.theme.accent);
+            let panel = app.color(&app.config.theme.panel);
+            let font = font(app.config.font_family.clone());
+            let buffer = if self.pane == Pane::Editor {
+                &app.documents.current().buffer
             } else {
-                let projection = &app.projection[source_row];
-                match projection.kind {
-                    BlockKind::Heading(level) => {
-                        font_size =
-                            (app.config.font_size + (7 - level) as f32 * 1.5).min(line_height - 3.)
-                    }
-                    BlockKind::Code => result.quads.push(fill(
-                        Bounds::new(
-                            point(bounds.left() + px(gutter - 6.), y),
-                            size(
-                                (bounds.size.width - px(gutter)).max(px(0.)),
-                                px(line_height),
-                            ),
-                        ),
-                        panel,
-                    )),
-                    BlockKind::Quote => result.quads.push(fill(
-                        Bounds::new(
-                            point(bounds.left() + px(gutter - 9.), y + px(3.)),
-                            size(px(2.), px(line_height - 6.)),
-                        ),
-                        accent,
-                    )),
-                    BlockKind::Rule => result.quads.push(fill(
-                        Bounds::new(
-                            point(bounds.left() + px(gutter), y + px(line_height / 2.)),
-                            size((bounds.size.width - px(gutter + 16.)).max(px(0.)), px(1.)),
-                        ),
-                        muted,
-                    )),
-                    _ => {}
+                &app.explorer.buffer
+            };
+            let top = app.tops[self.pane.index()];
+            let gutter = if self.pane == Pane::Editor { 56. } else { 16. };
+            let available = (bounds.size.width - px(gutter + 24.)).max(px(1.));
+            let style = SpanStyle {
+                font: font.clone(),
+                font_size: px(app.config.font_size),
+                foreground,
+                muted,
+                accent,
+                panel,
+            };
+            let mut tables: HashMap<usize, TableLayout> = HashMap::new();
+            let mut y = bounds.top() - px(app.scroll_offsets[self.pane.index()]);
+            let mut images = Vec::new();
+            for source_row in top..(top + visible + 1).min(buffer.lines.len()) {
+                let active = source_row == buffer.row && app.pane == self.pane;
+                let raw = active
+                    || self.pane == Pane::Explorer
+                    || buffer.selected_range(source_row).is_some();
+                if y >= bounds.bottom() {
+                    break;
                 }
-                let (built, span_runs) = style.text(&projection.spans);
-                runs = span_runs;
-                built
-            };
-            let line = window
-                .text_system()
-                .shape_line(text.into(), px(font_size), &runs, None);
-            let wrapped = if !raw && line.width > available {
-                window
-                    .text_system()
-                    .shape_text(
-                        line.text.clone(),
-                        px(font_size),
-                        &runs,
-                        Some(available),
-                        None,
-                    )
-                    .map(|mut lines| lines.pop())
-                    .unwrap_or_else(|error| {
-                        eprintln!("Wrapping text: {error}");
-                        None
-                    })
-            } else {
-                None
-            };
-            let mut row_height = px(line_height)
-                * (wrapped
-                    .as_ref()
-                    .map_or(1, |line| line.wrap_boundaries.len() + 1) as f32);
-            let caret = line.x_for_index(buffer.col.min(line.text.len()));
-            let shift = if active && caret > available {
-                caret - available
-            } else {
-                px(0.)
-            };
-            let origin = point(bounds.left() + px(gutter) - shift, y);
-            if active {
-                let mut highlight = accent;
-                highlight.a = 0.055;
-                result.quads.push(fill(
-                    Bounds::new(
-                        point(bounds.left(), y),
-                        size(bounds.size.width, px(line_height)),
-                    ),
-                    highlight,
-                ));
-                let mut cursor_color = accent;
-                cursor_color.a = if buffer.mode == Mode::Insert { 1. } else { 0.5 };
-                let width = if buffer.mode == Mode::Insert {
-                    px(2.)
+                if !raw && let Some(table) = app.projection[source_row].table.as_ref() {
+                    y += self.table_row(
+                        app,
+                        source_row,
+                        table,
+                        y,
+                        bounds,
+                        gutter,
+                        available,
+                        line_height,
+                        &mut tables,
+                        &style,
+                        &mut result,
+                        window,
+                    );
+                    continue;
+                }
+                let mut font_size = app.config.font_size;
+                let mut runs = Vec::new();
+                let text = if raw {
+                    let text = buffer.lines[source_row].text.clone();
+                    runs.push(run(&text, font.clone(), foreground));
+                    text
                 } else {
-                    px(app.config.font_size * 0.6)
+                    let projection = &app.projection[source_row];
+                    match projection.kind {
+                        BlockKind::Heading(level) => {
+                            font_size = (app.config.font_size + (7 - level) as f32 * 1.5)
+                                .min(line_height - 3.)
+                        }
+                        BlockKind::Code => result.quads.push(fill(
+                            Bounds::new(
+                                point(bounds.left() + px(gutter - 6.), y),
+                                size(
+                                    (bounds.size.width - px(gutter)).max(px(0.)),
+                                    px(line_height),
+                                ),
+                            ),
+                            panel,
+                        )),
+                        BlockKind::Quote => result.quads.push(fill(
+                            Bounds::new(
+                                point(bounds.left() + px(gutter - 9.), y + px(3.)),
+                                size(px(2.), px(line_height - 6.)),
+                            ),
+                            accent,
+                        )),
+                        BlockKind::Rule => result.quads.push(fill(
+                            Bounds::new(
+                                point(bounds.left() + px(gutter), y + px(line_height / 2.)),
+                                size((bounds.size.width - px(gutter + 16.)).max(px(0.)), px(1.)),
+                            ),
+                            muted,
+                        )),
+                        _ => {}
+                    }
+                    let (built, span_runs) = style.text(&projection.spans);
+                    runs = span_runs;
+                    built
                 };
-                result.cursor = Some(fill(
-                    Bounds::new(
-                        point(origin.x + caret, y + px(3.)),
-                        size(width, px(line_height - 6.)),
-                    ),
-                    cursor_color,
-                ));
-            }
-            if let Some(range) = buffer.selected_range(source_row) {
-                let mut color = accent;
-                color.a = 0.25;
-                let left = line.x_for_index(range.start);
-                let right = line.x_for_index(range.end);
-                result.quads.push(fill(
-                    Bounds::new(
-                        point(origin.x + left, y),
-                        size((right - left).max(px(4.)), px(line_height)),
-                    ),
-                    color,
-                ));
-            }
-            if self.pane == Pane::Editor {
-                let number = format!("{:>4}", source_row + 1);
-                let shaped = window.text_system().shape_line(
-                    number.clone().into(),
-                    px(app.config.font_size - 2.),
-                    &[run(&number, font.clone(), muted)],
-                    None,
-                );
+                let line = window
+                    .text_system()
+                    .shape_line(text.into(), px(font_size), &runs, None);
+                let wrapped = if !raw && line.width > available {
+                    window
+                        .text_system()
+                        .shape_text(
+                            line.text.clone(),
+                            px(font_size),
+                            &runs,
+                            Some(available),
+                            None,
+                        )
+                        .map(|mut lines| lines.pop())
+                        .unwrap_or_else(|error| {
+                            eprintln!("Wrapping text: {error}");
+                            None
+                        })
+                } else {
+                    None
+                };
+                let mut row_height = px(line_height)
+                    * (wrapped
+                        .as_ref()
+                        .map_or(1, |line| line.wrap_boundaries.len() + 1)
+                        as f32);
+                let caret = line.x_for_index(buffer.col.min(line.text.len()));
+                let shift = if active && caret > available {
+                    caret - available
+                } else {
+                    px(0.)
+                };
+                let origin = point(bounds.left() + px(gutter) - shift, y);
+                if active {
+                    let mut highlight = accent;
+                    highlight.a = 0.055;
+                    result.quads.push(fill(
+                        Bounds::new(
+                            point(bounds.left(), y),
+                            size(bounds.size.width, px(line_height)),
+                        ),
+                        highlight,
+                    ));
+                    let mut cursor_color = accent;
+                    cursor_color.a = if buffer.mode == Mode::Insert { 1. } else { 0.5 };
+                    let width = if buffer.mode == Mode::Insert {
+                        px(2.)
+                    } else {
+                        px(app.config.font_size * 0.6)
+                    };
+                    result.cursor = Some(fill(
+                        Bounds::new(
+                            point(origin.x + caret, y + px(3.)),
+                            size(width, px(line_height - 6.)),
+                        ),
+                        cursor_color,
+                    ));
+                }
+                if let Some(range) = buffer.selected_range(source_row) {
+                    let mut color = accent;
+                    color.a = 0.25;
+                    let left = line.x_for_index(range.start);
+                    let right = line.x_for_index(range.end);
+                    result.quads.push(fill(
+                        Bounds::new(
+                            point(origin.x + left, y),
+                            size((right - left).max(px(4.)), px(line_height)),
+                        ),
+                        color,
+                    ));
+                }
+                if self.pane == Pane::Editor {
+                    let number = format!("{:>4}", source_row + 1);
+                    let shaped = window.text_system().shape_line(
+                        number.clone().into(),
+                        px(app.config.font_size - 2.),
+                        &[run(&number, font.clone(), muted)],
+                        None,
+                    );
+                    result.text.push(DrawText {
+                        line: shaped,
+                        wrapped: None,
+                        origin: point(bounds.left() + px(4.), y),
+                        height: px(line_height),
+                        clip: None,
+                        align: TextAlign::Left,
+                    });
+                }
+                if !raw {
+                    let base = app
+                        .documents
+                        .current()
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.parent())
+                        .unwrap_or(&app.explorer.directory);
+                    for image in &app.projection[source_row].images {
+                        // Remote images remain linked alt text: opening a document never phones home.
+                        if image.url.contains("://") {
+                            continue;
+                        }
+                        let Some(bitmap) = load_image(&base.join(&image.url)) else {
+                            continue;
+                        };
+                        // Width-driven sizing: default 60% of the pane width, with a
+                        // per-image override from the title (`![alt](pic.png "40%")`
+                        // or `"320px"`). Height follows the bitmap's aspect ratio,
+                        // clamped so a wide image never exceeds the pane.
+                        let bitmap_size = bitmap.size(0);
+                        let ratio = bitmap_size.width.0 as f32 / bitmap_size.height.0 as f32;
+                        let width = match image.width {
+                            Some(crate::markdown::ImageWidth::Fraction(share)) => available * share,
+                            Some(crate::markdown::ImageWidth::Points(points)) => px(points),
+                            None => available * DEFAULT_IMAGE_WIDTH,
+                        }
+                        .min(available);
+                        let height = width / ratio;
+                        images.push((
+                            Bounds::new(point(origin.x, y + row_height), size(width, height)),
+                            bitmap,
+                        ));
+                        row_height += height;
+                    }
+                }
+                result.layout.rows.push(HitRow {
+                    source_row,
+                    origin,
+                    line: line.clone(),
+                    raw,
+                    height: row_height,
+                });
                 result.text.push(DrawText {
-                    line: shaped,
-                    wrapped: None,
-                    origin: point(bounds.left() + px(4.), y),
+                    line,
+                    wrapped,
+                    origin,
                     height: px(line_height),
                     clip: None,
                     align: TextAlign::Left,
                 });
+                y += row_height;
             }
-            if !raw {
-                let base = app
-                    .documents
-                    .current()
-                    .path
-                    .as_ref()
-                    .and_then(|p| p.parent())
-                    .unwrap_or(&app.explorer.directory);
-                for image in &app.projection[source_row].images {
-                    // Remote images remain linked alt text: opening a document never phones home.
-                    if image.url.contains("://") {
-                        continue;
-                    }
-                    let Some(bitmap) = load_image(&base.join(&image.url)) else {
-                        continue;
-                    };
-                    // Width-driven sizing: default 60% of the pane width, with a
-                    // per-image override from the title (`![alt](pic.png "40%")`
-                    // or `"320px"`). Height follows the bitmap's aspect ratio,
-                    // clamped so a wide image never exceeds the pane.
-                    let bitmap_size = bitmap.size(0);
-                    let ratio = bitmap_size.width.0 as f32 / bitmap_size.height.0 as f32;
-                    let width = match image.width {
-                        Some(crate::markdown::ImageWidth::Fraction(share)) => available * share,
-                        Some(crate::markdown::ImageWidth::Points(points)) => px(points),
-                        None => available * DEFAULT_IMAGE_WIDTH,
-                    }
-                    .min(available);
-                    let height = width / ratio;
-                    images.push((
-                        Bounds::new(point(origin.x, y + row_height), size(width, height)),
-                        bitmap,
-                    ));
-                    row_height += height;
+            let hidden_cursor = app.follow_cursor
+                && app.pane == self.pane
+                && !result
+                    .layout
+                    .rows
+                    .iter()
+                    .any(|row| row.source_row == buffer.row);
+            if hidden_cursor {
+                let row = buffer.row;
+                self.workspace
+                    .update(cx, |app, _| app.tops[self.pane.index()] = row);
+                continue;
+            }
+            result.images = images;
+            let realign = self.workspace.update(cx, |app, _| {
+                if !app.viewport_is_aligned(self.pane) {
+                    return false;
                 }
+                let index = self.pane.index();
+                let previous = (app.tops[index], app.scroll_offsets[index]);
+                for row in &result.layout.rows {
+                    app.row_heights[index][row.source_row] = f32::from(row.height);
+                }
+                app.ensure_cursor_visible(self.pane, f32::from(bounds.size.height));
+                previous.0 != app.tops[index]
+                    || (previous.1 - app.scroll_offsets[index]).abs() > 0.5
+            });
+            if realign {
+                continue;
             }
-            result.layout.rows.push(HitRow {
-                source_row,
-                origin,
-                line: line.clone(),
-                raw,
-                height: row_height,
-            });
-            result.text.push(DrawText {
-                line,
-                wrapped,
-                origin,
-                height: px(line_height),
-                clip: None,
-                align: TextAlign::Left,
-            });
-            y += row_height;
+            return result;
         }
-        let hidden_cursor = app.follow_cursor
-            && app.pane == self.pane
-            && !result
-                .layout
-                .rows
-                .iter()
-                .any(|row| row.source_row == buffer.row);
-        if hidden_cursor {
-            let row = buffer.row;
-            self.workspace
-                .update(cx, |app, _| app.tops[self.pane.index()] = row);
-            return self.prepaint(None, None, bounds, &mut (), window, cx);
-        }
-        result.images = images;
-        result
     }
     fn paint(
         &mut self,

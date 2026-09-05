@@ -92,6 +92,8 @@ pub struct Workspace {
     search: String,
     window_prefix: bool,
     pub follow_cursor: bool,
+    pane_heights: [f32; 3],
+    viewport_alignment: Option<(Pane, bool)>,
 }
 
 impl Workspace {
@@ -133,6 +135,8 @@ impl Workspace {
             search: String::new(),
             window_prefix: false,
             follow_cursor: true,
+            pane_heights: [0.; 3],
+            viewport_alignment: None,
         }
     }
     pub fn color(&self, value: &str) -> Hsla {
@@ -195,6 +199,7 @@ impl Workspace {
         }
     }
     fn set_pane(&mut self, pane: Pane, cx: &mut Context<Self>) {
+        self.viewport_alignment = None;
         if pane == Pane::Explorer {
             self.explorer_visible = true;
         }
@@ -418,7 +423,16 @@ impl Workspace {
             self.find_next(true);
             return Ok(());
         }
-        let command = command.trim_start_matches(':').trim();
+        let command = command.trim_start_matches(':').trim_start();
+        if let Some(substitution) = command.strip_prefix("%s") {
+            let count = self.buffer_mut().substitute(substitution)?;
+            if self.pane == Pane::Editor {
+                self.refresh_projection();
+            }
+            self.message = format!("{count} substitution{}", if count == 1 { "" } else { "s" });
+            return Ok(());
+        }
+        let command = command.trim_end();
         let (verb, arg) = command
             .split_once(char::is_whitespace)
             .map_or((command, ""), |(a, b)| (a, b.trim()));
@@ -508,6 +522,7 @@ impl Workspace {
     }
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.follow_cursor = true;
+        self.viewport_alignment = None;
         let result = self.handle_key(event, window, cx);
         match result {
             Ok(false) => return,
@@ -708,7 +723,30 @@ impl Workspace {
             self.buffer_mut().set_clipboard(text, linewise);
         }
         let before = self.buffer().revision();
+        self.buffer_mut().page_rows =
+            (self.pane_heights[self.pane.index()] / self.config.line_height).max(1.) as usize;
         self.buffer_mut().key(&key);
+        if let Some(motion) = self.buffer_mut().take_viewport_motion() {
+            let index = self.pane.index();
+            match motion {
+                crate::vim::ViewportMotion::Center => {
+                    self.viewport_alignment = Some((self.pane, true))
+                }
+                crate::vim::ViewportMotion::Top => {
+                    self.viewport_alignment = Some((self.pane, false))
+                }
+                crate::vim::ViewportMotion::HalfPage { down, rows } => {
+                    self.tops[index] = if down {
+                        self.tops[index]
+                            .saturating_add(rows)
+                            .min(self.buffer().lines.len() - 1)
+                    } else {
+                        self.tops[index].saturating_sub(rows)
+                    };
+                }
+            }
+            self.follow_cursor = matches!(motion, crate::vim::ViewportMotion::HalfPage { .. });
+        }
         if self.pane == Pane::Editor && self.documents.current().buffer.revision() != before {
             self.refresh_projection();
         }
@@ -776,6 +814,7 @@ impl Workspace {
         cx.notify();
     }
     pub fn scroll(&mut self, pane: Pane, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        self.viewport_alignment = None;
         if pane != Pane::Terminal {
             let delta: f32 = event
                 .delta
@@ -806,10 +845,12 @@ impl Workspace {
             cx.notify();
         }
     }
-    pub fn ensure_cursor_visible(&mut self, pane: Pane, rows: usize) {
+    pub fn ensure_cursor_visible(&mut self, pane: Pane, height: f32) {
         if pane == Pane::Terminal {
             return;
         }
+        self.pane_heights[pane.index()] = height;
+        let rows = (height / self.config.line_height).max(1.) as usize;
         let count = if pane == Pane::Editor {
             self.documents.current().buffer.lines.len()
         } else {
@@ -817,6 +858,24 @@ impl Workspace {
         };
         self.row_heights[pane.index()].resize(count, self.config.line_height);
         self.tops[pane.index()] = self.tops[pane.index()].min(count - 1);
+        if let Some((target, center)) = self.viewport_alignment
+            && target == pane
+        {
+            let index = pane.index();
+            let mut top = self.buffer().row;
+            let mut space = if center {
+                (height - self.config.line_height).max(0.) / 2.
+            } else {
+                0.
+            };
+            while top > 0 && space > 0. {
+                top -= 1;
+                space -= self.row_heights[index][top];
+            }
+            self.tops[index] = top;
+            self.scroll_offsets[index] = (-space).max(0.);
+            return;
+        }
         if self.follow_cursor && pane == self.pane && pane != Pane::Terminal {
             let row = self.buffer().row;
             self.scroll_offsets[pane.index()] = 0.;
@@ -827,6 +886,11 @@ impl Workspace {
                 *top = row.saturating_sub(rows.saturating_sub(1));
             }
         }
+    }
+
+    pub fn viewport_is_aligned(&self, pane: Pane) -> bool {
+        self.viewport_alignment
+            .is_some_and(|(target, _)| target == pane)
     }
     fn close_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.documents.active_id();
@@ -1085,6 +1149,8 @@ impl Render for Workspace {
             .when(self.help, |root| root.child(div().id("help-sheet").absolute().inset_0().m_8().p_6().bg(panel).border_1().border_color(accent).rounded_lg().overflow_y_scroll().flex().flex_col().gap_2()
                 .child(div().text_xl().text_color(accent).child("Rockdown · keyboard guide"))
                 .child(div().flex_shrink_0().text_sm().child("Editor and Files share the system clipboard: y copies, p/P paste. Deletes and changes also copy their removed text."))
+                .child(div().flex_shrink_0().text_sm().child("Ctrl-D / Ctrl-U: half-page down / up. zz: center current line. zt: current line at top."))
+                .child(div().flex_shrink_0().text_sm().child(r":%s/pattern/replacement/[giI]: whole-buffer substitution. Rust regex; & = match, \1 = capture. u undoes all replacements."))
                 .children(HELP.lines().map(|line| div().flex_shrink_0().text_sm().child(line.to_string())))
                 .child(div().flex_shrink_0().text_sm().child("Prose wraps. Local images render inline; remote images stay linked alt text (no network requests)."))))
             .child(div().h(px(34.)).flex_shrink_0().px_2().flex().items_center().gap_3().bg(panel).text_xs()
