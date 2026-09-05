@@ -89,7 +89,7 @@ Press **F1** or enter `:help` for the in-app keyboard guide. Press `Esc` to dism
 | `Cmd-W` / `Ctrl-Shift-W` | Close the current editor buffer, refusing unsaved changes. |
 | `F1` | Toggle the keyboard guide. |
 
-You can also click a pane to focus it and use the toolbar buttons to toggle docks.
+You can also click a pane to focus it. **Terminal** is at the bottom-left; **Hide Files / Show Files** and **Help** are at the bottom-right. The macOS title bar centers **Rockdown — {buffer name}** and updates when you switch or save a buffer under a new name.
 
 ## Markdown editing
 
@@ -113,6 +113,8 @@ You can also click a pane to focus it and use the toolbar buttons to toggle dock
 | `n` | Find the next match. |
 
 Counts work with supported motions and operators, such as `3j` or `2dd`. In Visual mode, use `y`, `d`, or `c` to yank, delete, or change the selection. `Cmd-C` copies a visual selection to the system clipboard; `Cmd-V` pastes clipboard text.
+
+The editor and file explorer share the **system clipboard** for Vim operations: `y`/`yy` copy text, and `p`/`P` paste the current clipboard after/before the cursor. This also works across buffers and after explorer navigation or refresh. Linewise yanks paste as whole lines; characterwise yanks stay inline. Text copied from another application replaces the previous yank. As with Vim's unnamed register, delete/change operations also copy the removed text. Explorer yanks copy the displayed filename, not the file's contents.
 
 **Return behavior:** in Insert mode, Return splits the line at the caret and moves the cursor to the new line. In Normal mode, it opens a line below and enters Insert mode. In the command line, Return executes the command.
 
@@ -140,7 +142,7 @@ Saves check for external file changes instead of silently overwriting them. If a
 
 An **editor buffer** is an open document, not a file explorer entry. Closing a buffer never deletes its file from disk.
 
-Click a tab to select a document, or use the **Prev**, **Next**, and **Close** controls above the editor. A `[+]` marker indicates unsaved changes.
+Click a tab to select a document, or its **×** to close it. Closing an inactive tab leaves the selected document active. A `[+]` marker indicates unsaved changes; the close control refuses to discard them.
 
 | Action | Commands |
 | --- | --- |
@@ -324,3 +326,5 @@ cargo build --release --locked
 Tests cover Vim/Unicode editing, document save conflicts, buffer lifecycle, explorer operations and recovery, Markdown projection, configuration, keyboard normalization, and terminal behavior. Tests are not a substitute for native-window interaction checks when changing the UI.
 
 After rebuilding, restart any already-running Rockdown instance to use the updated executable.
+
+![](R0009272.JPG "800px")

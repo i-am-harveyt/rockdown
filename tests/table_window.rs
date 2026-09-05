@@ -69,6 +69,67 @@ fn cmd_v_pastes_clipboard_into_the_editor(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn explorer_yank_uses_clipboard_across_panes_and_reload(cx: &mut TestAppContext) {
+    let (mut window, view) = table_window(cx);
+    window.update(|_, cx| {
+        view.update(cx, |app, cx| {
+            std::fs::write(app.explorer.directory.join("note.md"), "").unwrap();
+            app.explorer.reload().unwrap();
+            cx.notify();
+        });
+    });
+    cx.write_to_clipboard(ClipboardItem::new_string("old clipboard".into()));
+    window.simulate_keystrokes("ctrl-w l y y ctrl-w h p");
+    window.run_until_parked();
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().unwrap(),
+        "note.md\n"
+    );
+    assert_eq!(
+        window.update(|_, cx| view.read(cx).documents.current().buffer.text()),
+        TABLE.replacen("outside\n", "outside\nnote.md\n", 1)
+    );
+    // Refresh replaces the explorer buffer, but must not lose the yank.
+    window.simulate_keystrokes("ctrl-w l : e enter p");
+    window.run_until_parked();
+    assert_eq!(
+        window.update(|_, cx| view.read(cx).explorer.buffer.text()),
+        "note.md\nnote.md"
+    );
+    window.simulate_keystrokes("u");
+    assert_eq!(
+        window.update(|_, cx| view.read(cx).explorer.buffer.text()),
+        "note.md"
+    );
+}
+
+#[gpui::test]
+fn vim_paste_uses_latest_clipboard_and_preserves_characterwise_yanks(cx: &mut TestAppContext) {
+    let (mut window, view) = table_window(cx);
+    window.simulate_keystrokes("v l y");
+    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "ou");
+    window.simulate_keystrokes("ctrl-w l p");
+    assert_eq!(
+        window.update(|_, cx| view.read(cx).explorer.buffer.text()),
+        "ou"
+    );
+    // A copy from another application takes precedence over the last Vim yank.
+    cx.write_to_clipboard(ClipboardItem::new_string("NEW".into()));
+    window.simulate_keystrokes("ctrl-w h shift-p");
+    assert_eq!(
+        window.update(|_, cx| view.read(cx).documents.current().buffer.text()),
+        format!("NEW{TABLE}")
+    );
+    window.simulate_keystrokes("u");
+    cx.write_to_clipboard(ClipboardItem::new_string("".into()));
+    window.simulate_keystrokes("p");
+    assert_eq!(
+        window.update(|_, cx| view.read(cx).documents.current().buffer.text()),
+        TABLE
+    );
+}
+
+#[gpui::test]
 fn table_rows_render_as_grid_and_click_selects_source_row(cx: &mut TestAppContext) {
     let (mut window, view) = table_window(cx);
     // One hit row per source line; every table row (including the delimiter)
@@ -223,7 +284,13 @@ fn large_image_is_downscaled_and_renders_proportionally(cx: &mut TestAppContext)
         view.read(cx).layouts[Pane::Editor.index()]
             .rows
             .iter()
-            .map(|row| (row.source_row, f32::from(row.origin.y), f32::from(row.height)))
+            .map(|row| {
+                (
+                    row.source_row,
+                    f32::from(row.origin.y),
+                    f32::from(row.height),
+                )
+            })
             .collect::<Vec<_>>()
     });
     let image_row = rows.iter().find(|(row, _, _)| *row == 1).unwrap();
@@ -231,4 +298,3 @@ fn large_image_is_downscaled_and_renders_proportionally(cx: &mut TestAppContext)
     assert!(image_row.2 > 100.0);
     assert!((after.1 - (image_row.1 + image_row.2)).abs() < 0.5);
 }
-

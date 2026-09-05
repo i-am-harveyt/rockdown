@@ -514,6 +514,17 @@ impl Workspace {
             Ok(true) => {}
             Err(error) => self.message = format!("{error:#}"),
         }
+        if let Some((text, linewise)) = self.buffer_mut().take_yank() {
+            cx.write_to_clipboard(ClipboardItem::new_string_with_metadata(
+                text,
+                if linewise {
+                    "rockdown:lines"
+                } else {
+                    "rockdown:characters"
+                }
+                .into(),
+            ));
+        }
         cx.stop_propagation();
         cx.notify();
     }
@@ -682,6 +693,20 @@ impl Workspace {
             key.to_string()
         };
         self.marked = None;
+        if self.buffer().mode == Mode::Normal && matches!(key.as_str(), "p" | "P") {
+            let clipboard = cx.read_from_clipboard();
+            let text = clipboard.as_ref().and_then(ClipboardItem::text);
+            let linewise = match clipboard
+                .as_ref()
+                .and_then(ClipboardItem::metadata)
+                .map(String::as_str)
+            {
+                Some("rockdown:lines") => true,
+                Some("rockdown:characters") => false,
+                _ => text.as_ref().is_some_and(|text| text.ends_with('\n')),
+            };
+            self.buffer_mut().set_clipboard(text, linewise);
+        }
         let before = self.buffer().revision();
         self.buffer_mut().key(&key);
         if self.pane == Pane::Editor && self.documents.current().buffer.revision() != before {
@@ -803,97 +828,133 @@ impl Workspace {
             }
         }
     }
+    fn close_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let active = self.documents.active_id();
+        let result = self.change_document(
+            |documents| {
+                documents.select(id)?;
+                documents.delete(false)?;
+                if id != active {
+                    documents.select(active)?;
+                }
+                Ok(())
+            },
+            cx,
+        );
+        if let Err(error) = result {
+            self.message = error.to_string();
+        }
+        self.focus.focus(window);
+        cx.notify();
+    }
+
     fn buffer_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.documents.active_id();
         let accent = self.color(&self.config.theme.accent);
         let muted = self.color(&self.config.theme.muted);
         let panel = self.color(&self.config.theme.panel);
+        let background = self.color(&self.config.theme.background);
         div()
-            .h(px(34.))
+            .id("buffer-tabs")
+            .h(px(38.))
             .flex_shrink_0()
             .flex()
             .items_center()
+            .overflow_x_scroll()
             .bg(panel)
             .text_xs()
-            .child(
-                div()
-                    .id("buffer-tabs")
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .overflow_x_scroll()
-                    .children(
-                        self.documents
-                            .entries()
-                            .iter()
-                            .enumerate()
-                            .map(|(index, entry)| {
-                                let id = entry.id;
-                                let name = entry
-                                    .document
-                                    .path
-                                    .as_ref()
-                                    .and_then(|path| path.file_name())
-                                    .map(|name| name.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| "Untitled".into());
-                                // Buffer numbers are positional: closing a buffer renumbers
-                                // the rest, like Vim, instead of leaving gaps.
-                                let label = format!(
-                                    "{}: {}{}",
-                                    index + 1,
-                                    name,
-                                    if entry.document.buffer.dirty() {
-                                        " [+]"
-                                    } else {
-                                        ""
-                                    }
-                                );
-                                div()
-                                    .id(("buffer-tab", id))
-                                    .px_3()
-                                    .py_2()
-                                    .flex_shrink_0()
-                                    .cursor_pointer()
-                                    .text_color(if id == active { accent } else { muted })
-                                    .border_b_2()
-                                    .border_color(if id == active { accent } else { panel })
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        if let Err(error) = this
-                                            .change_document(|documents| documents.select(id), cx)
-                                        {
-                                            this.message = error.to_string();
-                                        }
-                                        this.focus.focus(window);
-                                        cx.notify();
-                                    }))
-                                    .child(label)
-                            }),
-                    ),
-            )
             .children(
-                [
-                    ("Prev", "previous-buffer"),
-                    ("Next", "next-buffer"),
-                    ("Close", "buffer-delete"),
-                ]
-                .into_iter()
-                .map(|(label, action)| {
-                    div()
-                        .id(action)
-                        .px_2()
-                        .py_2()
-                        .flex_shrink_0()
-                        .cursor_pointer()
-                        .text_color(accent)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if let Err(error) = this.action(action, window, cx) {
-                                this.message = error.to_string();
-                                cx.notify();
+                self.documents
+                    .entries()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, entry)| {
+                        let id = entry.id;
+                        let name = entry
+                            .document
+                            .path
+                            .as_ref()
+                            .and_then(|path| path.file_name())
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "Untitled".into());
+                        let label = format!(
+                            "{}: {}{}",
+                            index + 1,
+                            name,
+                            if entry.document.buffer.dirty() {
+                                " [+]"
+                            } else {
+                                ""
                             }
-                        }))
-                        .child(label)
-                }),
+                        );
+                        div()
+                            .id(("buffer-tab", id))
+                            .h_full()
+                            .px_3()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .flex_shrink_0()
+                            .cursor_pointer()
+                            .bg(if id == active { background } else { panel })
+                            .text_color(if id == active { accent } else { muted })
+                            .border_b_2()
+                            .border_color(if id == active { accent } else { panel })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if let Err(error) =
+                                    this.change_document(|documents| documents.select(id), cx)
+                                {
+                                    this.message = error.to_string();
+                                }
+                                this.focus.focus(window);
+                                cx.notify();
+                            }))
+                            .child(label)
+                            .child(
+                                div()
+                                    .id(("close-buffer", id))
+                                    .w(px(22.))
+                                    .h(px(22.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_md()
+                                    .text_size(px(17.))
+                                    .text_color(muted)
+                                    .hover(|style| style.bg(panel).text_color(accent))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        cx.stop_propagation();
+                                        this.close_tab(id, window, cx);
+                                    }))
+                                    .child("×"),
+                            )
+                    }),
             )
+    }
+
+    fn dock_button(
+        &self,
+        label: &'static str,
+        action: &'static str,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let accent = self.color(&self.config.theme.accent);
+        div()
+            .id(action)
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .flex_shrink_0()
+            .cursor_pointer()
+            .text_color(self.color(if selected {
+                &self.config.theme.accent
+            } else {
+                &self.config.theme.muted
+            }))
+            .hover(|style| style.text_color(accent))
+            .on_click(cx.listener(move |this, _, window, cx| this.run_action(action, window, cx)))
+            .child(label)
     }
     fn surface(&self, pane: Pane, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -965,6 +1026,16 @@ impl Render for Workspace {
         } else {
             "Show Files"
         };
+        let buffer_name = self
+            .documents
+            .current()
+            .path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Untitled".into());
+        let window_title = format!("Rockdown — {buffer_name}");
+        window.set_window_title(&window_title);
         div().size_full().flex().flex_col().bg(background).text_color(foreground).font_family(self.config.font_family.clone()).text_size(px(self.config.font_size))
             .track_focus(&self.focus).on_key_down(cx.listener(Self::key_down))
             .on_action(cx.listener(|this, _: &Save, window, cx| this.run_action("save", window, cx)))
@@ -980,9 +1051,20 @@ impl Render for Workspace {
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.stop_explorer_resize(cx)))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| this.stop_explorer_resize(cx)))
             .when(self.explorer_resize.is_some(), |root| root.cursor(CursorStyle::ResizeLeftRight))
-            .child(div().h(px(46.)).flex_shrink_0().px_4().flex().items_center().justify_between().bg(panel)
-                .child(div().flex().gap_4().child(div().text_color(accent).font_weight(FontWeight::BOLD).child("ROCKDOWN")).child(div().text_sm().text_color(muted).child("Markdown workspace")))
-                .child(div().flex().gap_4().children([(explorer_label, "explorer"),("Terminal", "terminal"),("Help", "help")].into_iter().map(|(label,action)| div().id(label).cursor_pointer().text_sm().text_color(accent).on_click(cx.listener(move |this,_,window,cx| { if let Err(e)=this.action(action,window,cx) { this.message=e.to_string(); cx.notify(); } })).child(label)))))
+            .when(cfg!(target_os = "macos"), |root| root.child(
+                div().id("window-title").h(px(32.)).flex_shrink_0()
+                    .px(px(80.)).flex().items_center().justify_center()
+                    .bg(panel).text_size(px(12.)).text_color(muted)
+                    .window_control_area(WindowControlArea::Drag)
+                    .on_mouse_down(MouseButton::Left, |event, window, _| {
+                        if event.click_count == 2 {
+                            window.zoom_window();
+                        } else {
+                            window.start_window_move();
+                        }
+                    })
+                    .child(div().overflow_hidden().text_ellipsis().child(window_title))
+            ))
             .child(div().flex_1().min_h_0().flex()
                 .child(div().flex_1().min_w_0().flex().flex_col()
                     .child(self.buffer_bar(cx))
@@ -994,7 +1076,7 @@ impl Render for Workspace {
                         .hover(|style| style.bg(accent))
                         .on_mouse_down(MouseButton::Left, cx.listener(Self::start_explorer_resize)))
                     .child(div().flex_1().min_w_0().flex().flex_col()
-                        .child(div().h(px(38.)).flex_shrink_0().px_3().flex().items_center().text_sm().text_color(accent).child(if self.explorer.dirty() { "FILES  [+]  :w applies changes" } else { "FILES  ·  Enter open  ·  - parent" }))
+                        .child(div().h(px(38.)).flex_shrink_0().px_3().flex().items_center().text_xs().text_color(muted).child(if self.explorer.dirty() { "Files  [+]" } else { "Files" }))
                         .child(div().px_3().pb_2().text_xs().text_color(muted).overflow_hidden().child(self.explorer.directory.display().to_string()))
                         .child(div().flex_1().min_h_0().child(self.surface(Pane::Explorer,cx)))))))
             .when(self.terminal_visible, |root| root.child(div().h(px(self.config.terminal_height)).flex_shrink_0().flex().flex_col().border_t_1().border_color(accent).bg(background)
@@ -1002,16 +1084,20 @@ impl Render for Workspace {
                 .child(div().flex_1().min_h_0().child(self.surface(Pane::Terminal,cx)))))
             .when(self.help, |root| root.child(div().id("help-sheet").absolute().inset_0().m_8().p_6().bg(panel).border_1().border_color(accent).rounded_lg().overflow_y_scroll().flex().flex_col().gap_2()
                 .child(div().text_xl().text_color(accent).child("Rockdown · keyboard guide"))
+                .child(div().flex_shrink_0().text_sm().child("Editor and Files share the system clipboard: y copies, p/P paste. Deletes and changes also copy their removed text."))
                 .children(HELP.lines().map(|line| div().flex_shrink_0().text_sm().child(line.to_string())))
                 .child(div().flex_shrink_0().text_sm().child("Prose wraps. Local images render inline; remote images stay linked alt text (no network requests)."))))
-            .child(div().h(px(30.)).flex_shrink_0().px_3().flex().items_center().gap_3().bg(panel).text_sm()
-                .child(div().text_color(accent).font_weight(FontWeight::BOLD).child(mode))
-                .child(div().flex_1().overflow_hidden().child(status))
-                .child(div().text_color(muted).child(location)))
+            .child(div().h(px(34.)).flex_shrink_0().px_2().flex().items_center().gap_3().bg(panel).text_xs()
+                .child(self.dock_button("Terminal", "terminal", self.terminal_visible, cx))
+                .child(div().flex_shrink_0().text_color(accent).font_weight(FontWeight::BOLD).child(mode))
+                .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().child(status))
+                .child(div().flex_shrink_0().text_color(muted).child(location))
+                .child(self.dock_button(explorer_label, "explorer", self.explorer_visible, cx))
+                .child(self.dock_button("Help", "help", self.help, cx)))
     }
 }
 
-const HELP: &str = "Editing: i/a/I/A insert · o/O new line · Esc normal · v visual\nReturn splits at the caret in Insert mode; in Normal mode it opens a line below.\nh/j/k/l or arrows · w/b/e words · 0/$ line · gg/G document\nx delete · dd/dw/d$ delete · cc/cw change · yy yank · p/P paste\nu undo · Ctrl-R redo · counts: 3j, 2dd · /find then n repeat\nCmd-V pastes the clipboard at the caret (terminal: bracketed paste).\nImages render at 60% of the pane width; ![alt](pic.png \"40%\") or \"320px\" resizes.\n:w [filename] save · :w! overwrite conflict · :e[!] [file] reload/open\n:q close window · :q! discard all and close · :wq save and close\n\nBuffers: click tabs, or use Prev / Next / Close above the editor.\n:bp / :bprevious / :previous-buffer · Ctrl-PageUp\n:bn / :bnext / :next-buffer · Ctrl-PageDown\n:bd / :bdelete / :buffer-delete · Cmd-W or Ctrl-Shift-W\n:bd! discards unsaved changes. Deleting a buffer does not delete its file.\n:e filename opens or activates a buffer without discarding other edits.\n\nExplorer: Ctrl-E / Cmd-E hide/show · Ctrl-W l or :ex reveal and focus\nDrag the left edge to resize. Hiding preserves staged changes and width.\nEnter open · - parent · Edit filenames with Vim.\no creates a line; trailing / creates a directory.\ndd stages deletion. :w commits; :e! discards. Deletes go to .rockdown-trash.\n\nTerminal: Ctrl-` toggle · Ctrl-W h editor / l files / j terminal\nReturn executes the command. Ctrl-C interrupts, Ctrl-D exits. Cmd-V pastes.\n\nConfiguration: ~/.config/rockdown/config.toml or config.lua\n--config PATH selects an explicit file. :config reloads settings.\nTOML wins if both default files exist. Lua must return a settings table.\n\nInactive lines render Markdown; the cursor line exposes editable syntax.\nClick a line to edit. Mouse wheel scrolls. Cmd-S saves. Esc closes help.";
+const HELP: &str = "Editing: i/a/I/A insert · o/O new line · Esc normal · v visual\nReturn splits at the caret in Insert mode; in Normal mode it opens a line below.\nh/j/k/l or arrows · w/b/e words · 0/$ line · gg/G document\nx delete · dd/dw/d$ delete · cc/cw change · yy yank · p/P paste\nu undo · Ctrl-R redo · counts: 3j, 2dd · /find then n repeat\nCmd-V pastes the clipboard at the caret (terminal: bracketed paste).\nImages render at 60% of the pane width; ![alt](pic.png \"40%\") or \"320px\" resizes.\n:w [filename] save · :w! overwrite conflict · :e[!] [file] reload/open\n:q close window · :q! discard all and close · :wq save and close\n\nBuffers: click a tab to select; click its × to close. Unsaved changes are protected.\n:bp / :bprevious / :previous-buffer · Ctrl-PageUp\n:bn / :bnext / :next-buffer · Ctrl-PageDown\n:bd / :bdelete / :buffer-delete · Cmd-W or Ctrl-Shift-W\n:bd! discards unsaved changes. Deleting a buffer does not delete its file.\n:e filename opens or activates a buffer without discarding other edits.\n\nExplorer: Ctrl-E / Cmd-E hide/show · Ctrl-W l or :ex reveal and focus\nDrag the left edge to resize. Hiding preserves staged changes and width.\nEnter open · - parent · Edit filenames with Vim.\no creates a line; trailing / creates a directory.\ndd stages deletion. :w commits; :e! discards. Deletes go to .rockdown-trash.\n\nTerminal: Ctrl-` toggle · Ctrl-W h editor / l files / j terminal\nReturn executes the command. Ctrl-C interrupts, Ctrl-D exits. Cmd-V pastes.\n\nConfiguration: ~/.config/rockdown/config.toml or config.lua\n--config PATH selects an explicit file. :config reloads settings.\nTOML wins if both default files exist. Lua must return a settings table.\n\nInactive lines render Markdown; the cursor line exposes editable syntax.\nClick a line to edit. Mouse wheel scrolls. Cmd-S saves. Esc closes help.";
 
 fn utf8_offset(text: &str, utf16: usize) -> usize {
     let mut units = 0;

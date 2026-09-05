@@ -79,7 +79,8 @@ fn run() -> Result<()> {
                 window_min_size: Some(size(px(720.), px(480.))),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Rockdown".into()),
-                    ..Default::default()
+                    appears_transparent: cfg!(target_os = "macos"),
+                    traffic_light_position: Some(point(px(12.), px(9.))),
                 }),
                 ..Default::default()
             },

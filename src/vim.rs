@@ -58,6 +58,7 @@ pub struct Buffer {
     insert_start: Option<Snapshot>,
     visual_anchor: Option<Position>,
     register: Option<Register>,
+    register_changed: bool,
     pending: Option<Pending>,
     count: Option<usize>,
     preferred_column: Option<usize>,
@@ -90,10 +91,44 @@ impl Buffer {
             insert_start: None,
             visual_anchor: None,
             register: None,
+            register_changed: false,
             pending: None,
             count: None,
             preferred_column: None,
         }
+    }
+
+    /// Import clipboard text without treating a paste as a new yank.
+    pub fn set_clipboard(&mut self, text: Option<String>, linewise: bool) {
+        self.register = text.map(|text| {
+            if linewise {
+                Register::Lines(
+                    text.strip_suffix('\n')
+                        .unwrap_or(&text)
+                        .split('\n')
+                        .map(str::to_owned)
+                        .collect(),
+                )
+            } else {
+                Register::Characters(text)
+            }
+        });
+        self.register_changed = false;
+    }
+
+    /// Export only completed yank/delete/change operations, not motions or undo.
+    pub fn take_yank(&mut self) -> Option<(String, bool)> {
+        if !std::mem::take(&mut self.register_changed) {
+            return None;
+        }
+        self.register.as_ref().map(|register| match register {
+            Register::Characters(text) => (text.clone(), false),
+            Register::Lines(lines) => {
+                let mut text = lines.join("\n");
+                text.push('\n');
+                (text, true)
+            }
+        })
     }
 
     pub fn text(&self) -> String {
@@ -657,6 +692,7 @@ impl Buffer {
                 .map(|line| line.text.clone())
                 .collect(),
         ));
+        self.register_changed = true;
         if operator == 'y' {
             return;
         }
@@ -696,6 +732,7 @@ impl Buffer {
     fn operate_range(&mut self, operator: char, start: Position, end: Position) {
         if start != end {
             self.register = Some(Register::Characters(self.range_text(start, end)));
+            self.register_changed = true;
         }
         if operator == 'y' {
             return;
@@ -1282,4 +1319,3 @@ mod tests {
         assert_eq!(buffer.redo_stack.len(), MAX_UNDO_DEPTH);
     }
 }
-
