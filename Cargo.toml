@@ -12,7 +12,6 @@ gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
 # Local preview images: decode once, paint as quads. Matches gpui's pinned version.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 libc = "0.2"
-mlua = { version = "0.11", features = ["lua54", "vendored", "serialize"] }
 portable-pty = "0.9"
 pulldown-cmark = "0.13"
 regex = "1"

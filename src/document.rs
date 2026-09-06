@@ -33,6 +33,13 @@ impl Document {
             saved: Some(text),
         })
     }
+    pub fn is_markdown(&self) -> bool {
+        self.path.as_ref().is_none_or(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        })
+    }
     pub fn save(&mut self, target: Option<&Path>, force: bool) -> Result<()> {
         let path = target
             .map(Path::to_path_buf)

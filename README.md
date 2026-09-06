@@ -9,9 +9,9 @@ A lightweight, native Markdown workspace built with **Rust and GPUI**. Rockdown 
 - **Multiple buffers:** switch between documents without losing unsaved text, cursor position, viewport, or undo history.
 - **Right-hand file explorer:** rename, create, and stage deletions by editing filenames as buffer lines. Hide the dock or drag its left edge to resize it.
 - **Embedded terminal:** a real PTY shell with color support, keyboard input, and resizing.
-- **TOML or Lua configuration:** customize fonts, colors, dock dimensions, shell, and shortcuts.
+- **TOML configuration:** customize fonts, colors, dock dimensions, shell, and shortcuts.
 
-Rockdown uses **line-based live preview**, rather than a separate preview pane: inactive lines render as Markdown, while the active line exposes its source syntax for editing. Files remain plain UTF-8 text on disk.
+Rockdown uses **line-based live preview** for `.md` files (case-insensitive) and untitled buffers: inactive lines render as Markdown, while the active line exposes its source syntax for editing. All other named files—including TOML, code, and extensionless files—show literal plain text, without Markdown styling, tables, or image previews. Preview mode follows save-as and explorer renames. Files remain plain UTF-8 text on disk.
 
 ## Build and run
 
@@ -23,7 +23,7 @@ Rockdown uses **line-based live preview**, rather than a separate preview pane: 
 
 **Platform status:** development and native-window verification have been performed on macOS Apple Silicon. The code includes Linux PTY and filesystem support, but Linux builds and UI behavior have not been verified here. Linux may require additional GPUI system dependencies and an installed monospace font. Windows is not currently supported by the embedded terminal and explorer commit implementation.
 
-The macOS build enables GPUI's runtime shader compilation, so a separate Xcode Metal compiler toolchain is not required. Lua is built through the vendored dependency; a separate Lua installation is not required.
+The macOS build enables GPUI's runtime shader compilation, so a separate Xcode Metal compiler toolchain is not required.
 
 From the repository root:
 
@@ -56,7 +56,7 @@ rockdown [FILE|DIRECTORY] [--config PATH] [--check-config]
 
 | Option | Purpose |
 | --- | --- |
-| `--config PATH` | Load an explicitly selected `.toml` or `.lua` configuration. |
+| `--config PATH` | Load an explicitly selected `.toml` configuration. |
 | `--check-config` | Validate configuration and exit without opening a window. |
 | `--help`, `-h` | Print usage information. |
 
@@ -225,13 +225,11 @@ Hiding the dock keeps the shell session running. When the shell exits—through 
 Rockdown loads configuration in this order:
 
 1. The file explicitly supplied with `--config PATH`.
-2. Otherwise, `config.toml` or `config.lua` under `$XDG_CONFIG_HOME/rockdown/`.
+2. Otherwise, `config.toml` under `$XDG_CONFIG_HOME/rockdown/`.
 3. If `XDG_CONFIG_HOME` is unset, that directory is `~/.config/rockdown/`.
-4. If neither default file exists, built-in defaults are used.
+4. If no config file exists, built-in defaults are used.
 
-**TOML wins when both default files exist.** An invalid selected config produces an error rather than falling back to the other file.
-
-Project-local config is not loaded automatically. Lua configuration executes code and must return a settings table; only load Lua files you trust.
+An invalid selected config produces an error on startup or reload. Project-local config is not loaded automatically.
 
 ### TOML example
 
@@ -251,27 +249,7 @@ muted = "#8995a7"
 accent = "#9cc7b5"
 ```
 
-### Equivalent Lua configuration
-
-```lua
-return {
-  font_family = "Menlo",
-  font_size = 16,
-  line_height = 30,
-  explorer_width = 300,
-  terminal_height = 240,
-  shell = "/bin/zsh",
-  theme = {
-    background = "#171b22",
-    panel = "#1e242e",
-    foreground = "#dce3ec",
-    muted = "#8995a7",
-    accent = "#9cc7b5",
-  },
-}
-```
-
-Complete examples, including the default shortcut map, are provided in [`examples/config.toml`](examples/config.toml) and [`examples/config.lua`](examples/config.lua).
+A complete example, including the default shortcut map, is provided in [`examples/config.toml`](examples/config.toml).
 
 ### Available settings
 
@@ -284,9 +262,44 @@ Complete examples, including the default shortcut map, are provided in [`example
 | `terminal_height` | `240` | Range: 100–600. |
 | `shell` | `$SHELL`, then `/bin/sh` | Shell executable, not a command string with arguments. |
 | `theme` | Colors shown above | Six-digit RGB hex colors, with or without `#`. |
+| `markdown` | Inherited colors and built-in heading sizes | Nested appearance settings described below. |
 | `keys` | Built-in shortcuts | Maps GPUI keystrokes to action names. |
 
 Unknown settings, unsupported action names, and invalid values are rejected.
+
+### Markdown appearance
+
+The optional `markdown` table customizes appearance. Existing configs need no changes: omitted tables and fields retain their defaults, including partial settings within a heading or color table.
+
+| Table | Fields | Defaults and limits |
+| --- | --- | --- |
+| `markdown.colors` | `normal`, `bold`, `italic`, `bold_italic`, `code`, `link`, `strikethrough`, `quote` | Optional six-digit RGB hex colors, with or without `#`. |
+| `markdown.h1` through `markdown.h6` | `font_size`, `color`, `underline` | Each level is independent. Optional `font_size`: 10–128; optional RGB `color`; `underline`: `false`. |
+| `markdown.divider` | `color`, `thickness` | Optional RGB `color`; `thickness`: `1`, range 0.5–12. |
+
+`normal` inherits `theme.foreground` when omitted. It sets the editor's base text color, including the active line's raw source and plain-text documents; explorer text continues to use the theme. `code` and `link` default to `theme.accent`. Other unset colors inherit the applicable heading or quote color, then `normal`. Heading and quote colors themselves inherit `normal`; divider color inherits `theme.muted`.
+
+Color precedence, highest first, is **syntax highlighting → code → link → bold-italic → bold → italic → strikethrough → heading/quote → normal**. A missing optional override leaves the inherited color in place rather than masking a lower-priority color.
+
+All six heading levels can override their size, color, and underline separately. An omitted heading size uses the built-in scaling relative to `font_size`. Larger heading sizes automatically expand rows so content is not clipped; you do not need to increase `line_height` to fit them. `underline = true` draws a full-width line below that heading's content. Heading underlines and horizontal rules share `markdown.divider.color` and `markdown.divider.thickness`.
+
+For example, these TOML settings enlarge and underline first-level headings while leaving other sizes and colors inherited:
+
+```toml
+[markdown.colors]
+bold = "#f2cf8f"
+link = "#8fc8ed"
+
+[markdown.h1]
+font_size = 36
+underline = true
+
+[markdown.divider]
+color = "#566575"
+thickness = 1.5
+```
+
+Font sizes and thicknesses must be finite; invalid colors, out-of-range values, and unknown nested fields are rejected. Use `:config` after saving the selected config to reload appearance without restarting; row sizes are recalculated in every pane.
 
 ### Custom shortcuts
 
@@ -305,13 +318,12 @@ next-buffer
 
 `explorer` and `terminal` toggle their docks. `buffer-delete` is the safe close action; forced discard remains an explicit command such as `:bd!`.
 
-**Defining `[keys]` in TOML or `keys = { ... }` in Lua replaces the entire default shortcut map; it does not merge individual entries.** Copy the full map from an example file and modify it if you want to retain the other defaults. Vim editing keys and colon commands remain available independently of that map.
+**Defining `[keys]` in TOML replaces the entire default shortcut map; it does not merge individual entries.** Copy the full map from an example file and modify it if you want to retain the other defaults. Vim editing keys and colon commands remain available independently of that map.
 
 Validate a config before launching:
 
 ```sh
 ./target/release/rockdown --check-config --config examples/config.toml
-./target/release/rockdown --check-config --config examples/config.lua
 ```
 
 Run with an explicit config:

@@ -108,7 +108,11 @@ impl Workspace {
         let focus = cx.focus_handle();
         focus.focus(window);
         bind_config_keys(&config, cx);
-        let projection = markdown::project(&document.buffer.text());
+        let projection = if document.is_markdown() {
+            markdown::project(&document.buffer.text())
+        } else {
+            Vec::new()
+        };
         Self {
             config,
             config_path,
@@ -157,7 +161,12 @@ impl Workspace {
         }
     }
     pub fn refresh_projection(&mut self) {
-        self.projection = markdown::project(&self.documents.current().buffer.text());
+        let document = self.documents.current();
+        self.projection = if document.is_markdown() {
+            markdown::project(&document.buffer.text())
+        } else {
+            Vec::new()
+        };
         self.row_heights[Pane::Editor.index()].clear();
     }
     fn change_document(
@@ -322,6 +331,7 @@ impl Workspace {
             }
             let report = self.explorer.commit()?;
             self.documents.reconcile(&report);
+            self.refresh_projection();
             self.message = format!(
                 "Explorer saved: {} created, {} renamed, {} moved to .rockdown-trash",
                 report.created.len(),
@@ -337,6 +347,7 @@ impl Workspace {
                 }
             });
             self.documents.save(target.as_deref(), force)?;
+            self.refresh_projection();
             self.message = format!(
                 "Saved {}",
                 self.documents.current().path.as_ref().unwrap().display()
@@ -516,6 +527,9 @@ impl Workspace {
                 bind_config_keys(&config, cx);
                 self.config = config;
                 self.config_path = path;
+                for heights in &mut self.row_heights {
+                    heights.clear();
+                }
                 self.message = "Configuration reloaded; new shell setting applies to the next terminal session".into();
             }
             "" => {}
@@ -1270,7 +1284,7 @@ impl Render for ControlTooltip {
     }
 }
 
-const HELP: &str = "Editing: i/a/I/A insert · o/O new line · Esc normal · v visual\nReturn splits at the caret in Insert mode; in Normal mode it opens a line below.\nh/j/k/l or arrows · w/b/e words · 0/$ line · gg/G document\nx delete · dd/dw/d$ delete · cc/cw change · yy yank · p/P paste\nu undo · Ctrl-R redo · counts: 3j, 2dd · /find then n repeat\nCmd-V pastes the clipboard at the caret (terminal: bracketed paste).\nImages render at 60% of the pane width; ![alt](pic.png \"40%\") or \"320px\" resizes.\n:w [filename] save · :w! overwrite conflict · :e[!] [file] reload/open\n:q close window · :q! discard all and close · :wq save and close\n\nBuffers: click a tab to select; click its × to close. Unsaved changes are protected.\n:bp / :bprevious / :previous-buffer · Ctrl-PageUp\n:bn / :bnext / :next-buffer · Ctrl-PageDown\n:bd / :bdelete / :buffer-delete · Cmd-W or Ctrl-Shift-W\n:bd! discards unsaved changes. Deleting a buffer does not delete its file.\n:e filename opens or activates a buffer without discarding other edits.\n\nExplorer: Ctrl-E / Cmd-E hide/show · Ctrl-W l or :ex reveal and focus\nDrag the left edge to resize. Hiding preserves staged changes and width.\nEnter open · - parent · Edit filenames with Vim.\no creates a line; trailing / creates a directory.\ndd stages deletion. :w commits; :e! discards. Deletes go to .rockdown-trash.\n\nTerminal: Ctrl-` toggle · Ctrl-W h editor / l files / j terminal\nReturn executes the command. Ctrl-C interrupts, Ctrl-D exits. Cmd-V pastes.\n\nConfiguration: ~/.config/rockdown/config.toml or config.lua\n--config PATH selects an explicit file. :config reloads settings.\nTOML wins if both default files exist. Lua must return a settings table.\n\nInactive lines render Markdown; the cursor line exposes editable syntax.\nClick a line to edit. Mouse wheel scrolls. Cmd-S saves. Esc closes help.";
+const HELP: &str = "Editing: i/a/I/A insert · o/O new line · Esc normal · v visual\nReturn splits at the caret in Insert mode; in Normal mode it opens a line below.\nh/j/k/l or arrows · w/b/e words · 0/$ line · gg/G document\nx delete · dd/dw/d$ delete · cc/cw change · yy yank · p/P paste\nu undo · Ctrl-R redo · counts: 3j, 2dd · /find then n repeat\nCmd-V pastes the clipboard at the caret (terminal: bracketed paste).\nImages render at 60% of the pane width; ![alt](pic.png \"40%\") or \"320px\" resizes.\n:w [filename] save · :w! overwrite conflict · :e[!] [file] reload/open\n:q close window · :q! discard all and close · :wq save and close\n\nBuffers: click a tab to select; click its × to close. Unsaved changes are protected.\n:bp / :bprevious / :previous-buffer · Ctrl-PageUp\n:bn / :bnext / :next-buffer · Ctrl-PageDown\n:bd / :bdelete / :buffer-delete · Cmd-W or Ctrl-Shift-W\n:bd! discards unsaved changes. Deleting a buffer does not delete its file.\n:e filename opens or activates a buffer without discarding other edits.\n\nExplorer: Ctrl-E / Cmd-E hide/show · Ctrl-W l or :ex reveal and focus\nDrag the left edge to resize. Hiding preserves staged changes and width.\nEnter open · - parent · Edit filenames with Vim.\no creates a line; trailing / creates a directory.\ndd stages deletion. :w commits; :e! discards. Deletes go to .rockdown-trash.\n\nTerminal: Ctrl-` toggle · Ctrl-W h editor / l files / j terminal\nReturn executes the command. Ctrl-C interrupts, Ctrl-D exits. Cmd-V pastes.\n\nConfiguration: ~/.config/rockdown/config.toml\n--config PATH selects an explicit file. :config reloads settings.\nmarkdown.colors: normal/bold/italic/bold_italic/code/link/strikethrough/quote.\nmarkdown.h1 through h6: font_size, color, underline.\nmarkdown.divider: color, thickness (also used by heading underlines).\n\nPreview applies to .md filenames (case-insensitive) and untitled buffers only.\nOther filenames show literal text. In Markdown, inactive lines render;\nthe cursor line exposes editable syntax. Save-as updates the preview type.\nClick a line to edit. Mouse wheel scrolls. Cmd-S saves. Esc closes help.";
 
 fn utf8_offset(text: &str, utf16: usize) -> usize {
     let mut units = 0;

@@ -163,8 +163,14 @@ struct SpanStyle {
     font_size: Pixels,
     foreground: Hsla,
     muted: Hsla,
-    accent: Hsla,
     panel: Hsla,
+    bold: Option<Hsla>,
+    italic: Option<Hsla>,
+    bold_italic: Option<Hsla>,
+    code: Hsla,
+    link: Hsla,
+    strikethrough: Option<Hsla>,
+    quote: Option<Hsla>,
 }
 
 /// Parse a `#rrggbb` color from the syntax highlighter into a render color.
@@ -175,20 +181,25 @@ fn parse_hex(hex: &str) -> Option<Hsla> {
 }
 
 impl SpanStyle {
-    fn text(&self, spans: &[Span]) -> (String, Vec<TextRun>) {
+    fn text(&self, spans: &[Span], base: Hsla) -> (String, Vec<TextRun>) {
         let mut text = String::new();
         let mut runs = Vec::with_capacity(spans.len());
         for span in spans {
             text.push_str(&span.text);
-            let mut style = run(
-                &span.text,
-                self.font.clone(),
-                if span.link.is_some() {
-                    self.accent
-                } else {
-                    self.foreground
-                },
-            );
+            let color = if span.code {
+                self.code
+            } else if span.link.is_some() {
+                self.link
+            } else {
+                (span.bold && span.italic)
+                    .then_some(self.bold_italic)
+                    .flatten()
+                    .or_else(|| span.bold.then_some(self.bold).flatten())
+                    .or_else(|| span.italic.then_some(self.italic).flatten())
+                    .or_else(|| span.strike.then_some(self.strikethrough).flatten())
+                    .unwrap_or(base)
+            };
+            let mut style = run(&span.text, self.font.clone(), color);
             if span.bold {
                 style.font.weight = FontWeight::BOLD;
             }
@@ -203,19 +214,18 @@ impl SpanStyle {
                 }
             } else if span.code {
                 style.background_color = Some(self.panel);
-                style.color = self.accent;
             }
             if span.link.is_some() {
                 style.underline = Some(UnderlineStyle {
                     thickness: px(1.),
-                    color: Some(self.accent),
+                    color: Some(self.link),
                     wavy: false,
                 });
             }
             if span.strike {
                 style.strikethrough = Some(StrikethroughStyle {
                     thickness: px(1.),
-                    color: Some(self.muted),
+                    color: Some(self.strikethrough.unwrap_or(self.muted)),
                 });
             }
             runs.push(style);
@@ -299,7 +309,7 @@ impl TableLayout {
                             .iter()
                             .enumerate()
                             .map(|(column, spans)| {
-                                let (text, runs) = style.text(spans);
+                                let (text, runs) = style.text(spans, style.foreground);
                                 let line = window.text_system().shape_line(
                                     text.clone().into(),
                                     style.font_size,
@@ -401,6 +411,10 @@ impl Element for Surface {
             let accent = app.color(&app.config.theme.accent);
             let panel = app.color(&app.config.theme.panel);
             let font = font(app.config.font_family.clone());
+            let markdown = &app.config.markdown;
+            let color = |value: &Option<String>| value.as_deref().map(|hex| app.color(hex));
+            let divider_color = color(&markdown.divider.color).unwrap_or(muted);
+            let divider_thickness = px(markdown.divider.thickness);
             let buffer = if self.pane == Pane::Editor {
                 &app.documents.current().buffer
             } else {
@@ -412,10 +426,16 @@ impl Element for Surface {
             let style = SpanStyle {
                 font: font.clone(),
                 font_size: px(app.config.font_size),
-                foreground,
+                foreground: color(&markdown.colors.normal).unwrap_or(foreground),
                 muted,
-                accent,
                 panel,
+                bold: color(&markdown.colors.bold),
+                italic: color(&markdown.colors.italic),
+                bold_italic: color(&markdown.colors.bold_italic),
+                code: color(&markdown.colors.code).unwrap_or(accent),
+                link: color(&markdown.colors.link).unwrap_or(accent),
+                strikethrough: color(&markdown.colors.strikethrough),
+                quote: color(&markdown.colors.quote),
             };
             let mut tables: HashMap<usize, TableLayout> = HashMap::new();
             let mut y = bounds.top() - px(app.scroll_offsets[self.pane.index()]);
@@ -424,6 +444,7 @@ impl Element for Surface {
                 let active = source_row == buffer.row && app.pane == self.pane;
                 let raw = active
                     || self.pane == Pane::Explorer
+                    || app.projection.is_empty()
                     || buffer.selected_range(source_row).is_some();
                 if y >= bounds.bottom() {
                     break;
@@ -446,17 +467,36 @@ impl Element for Surface {
                     continue;
                 }
                 let mut font_size = app.config.font_size;
+                let mut text_line_height = line_height;
+                let mut heading_underline = false;
                 let mut runs = Vec::new();
                 let text = if raw {
                     let text = buffer.lines[source_row].text.clone();
-                    runs.push(run(&text, font.clone(), foreground));
+                    runs.push(run(
+                        &text,
+                        font.clone(),
+                        if self.pane == Pane::Editor {
+                            style.foreground
+                        } else {
+                            foreground
+                        },
+                    ));
                     text
                 } else {
                     let projection = &app.projection[source_row];
+                    let mut base = style.foreground;
                     match projection.kind {
                         BlockKind::Heading(level) => {
-                            font_size = (app.config.font_size + (7 - level) as f32 * 1.5)
-                                .min(line_height - 3.)
+                            let heading = markdown.heading(level);
+                            font_size = heading.font_size.unwrap_or_else(|| {
+                                (app.config.font_size + (7 - level) as f32 * 1.5)
+                                    .min(line_height - 3.)
+                            });
+                            if heading.font_size.is_some() {
+                                text_line_height = line_height.max(font_size + 4.);
+                            }
+                            base = color(&heading.color).unwrap_or(base);
+                            heading_underline = heading.underline;
                         }
                         BlockKind::Code => result.quads.push(fill(
                             Bounds::new(
@@ -468,23 +508,29 @@ impl Element for Surface {
                             ),
                             panel,
                         )),
-                        BlockKind::Quote => result.quads.push(fill(
-                            Bounds::new(
-                                point(bounds.left() + px(gutter - 9.), y + px(3.)),
-                                size(px(2.), px(line_height - 6.)),
-                            ),
-                            accent,
-                        )),
+                        BlockKind::Quote => {
+                            base = style.quote.unwrap_or(base);
+                            result.quads.push(fill(
+                                Bounds::new(
+                                    point(bounds.left() + px(gutter - 9.), y + px(3.)),
+                                    size(px(2.), px(line_height - 6.)),
+                                ),
+                                accent,
+                            ));
+                        }
                         BlockKind::Rule => result.quads.push(fill(
                             Bounds::new(
                                 point(bounds.left() + px(gutter), y + px(line_height / 2.)),
-                                size((bounds.size.width - px(gutter + 16.)).max(px(0.)), px(1.)),
+                                size(
+                                    (bounds.size.width - px(gutter + 16.)).max(px(0.)),
+                                    divider_thickness,
+                                ),
                             ),
-                            muted,
+                            divider_color,
                         )),
                         _ => {}
                     }
-                    let (built, span_runs) = style.text(&projection.spans);
+                    let (built, span_runs) = style.text(&projection.spans, base);
                     runs = span_runs;
                     built
                 };
@@ -509,11 +555,24 @@ impl Element for Surface {
                 } else {
                     None
                 };
-                let mut row_height = px(line_height)
+                let mut row_height = px(text_line_height)
                     * (wrapped
                         .as_ref()
                         .map_or(1, |line| line.wrap_boundaries.len() + 1)
                         as f32);
+                if heading_underline {
+                    result.quads.push(fill(
+                        Bounds::new(
+                            point(bounds.left() + px(gutter), y + row_height + px(2.)),
+                            size(
+                                (bounds.size.width - px(gutter + 16.)).max(px(0.)),
+                                divider_thickness,
+                            ),
+                        ),
+                        divider_color,
+                    ));
+                    row_height += divider_thickness + px(4.);
+                }
                 let caret = line.x_for_index(buffer.col.min(line.text.len()));
                 let shift = if active && caret > available {
                     caret - available
@@ -623,7 +682,7 @@ impl Element for Surface {
                     line,
                     wrapped,
                     origin,
-                    height: px(line_height),
+                    height: px(text_line_height),
                     clip: None,
                     align: TextAlign::Left,
                 });
