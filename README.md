@@ -89,7 +89,7 @@ Press **F1** or enter `:help` for the in-app keyboard guide. Press `Esc` to dism
 | `Cmd-W` / `Ctrl-Shift-W` | Close the current editor buffer, refusing unsaved changes. |
 | `F1` | Toggle the keyboard guide. |
 
-You can also click a pane to focus it. **Terminal** is at the bottom-left; **Hide Files / Show Files** and **Help** are at the bottom-right. The macOS title bar centers **Rockdown — {buffer name}** and updates when you switch or save a buffer under a new name.
+You can also click a pane to focus it. The **terminal icon** is at the bottom-left; the **folder** and **circled question-mark** icons at the bottom-right toggle Files and Help. Hover for a tooltip identifying the action; icons stay highlighted while their dock or guide is open. Footer buttons, buffer tabs, and tab-close controls have distinct hover and pressed highlights. The macOS title bar centers **Rockdown — {buffer name}** and updates when you switch or save a buffer under a new name.
 
 ## Markdown editing
 
@@ -183,7 +183,7 @@ The right dock is an **editable listing of filenames**. Its Vim editing commands
 - `j` / `k`: select an entry.
 - Return in Normal mode: open a file or enter a directory.
 - `-` in Normal mode: go to the parent directory.
-- `Ctrl-E` / `Cmd-E`, or **Hide Files / Show Files**: toggle visibility.
+- `Ctrl-E` / `Cmd-E`, or the bottom-right **folder icon**: toggle visibility.
 - Drag the dock's **left edge** to resize it. Width is bounded to leave room for the editor.
 
 Hiding the explorer preserves its staged edits and resized width. Resizing changes the current session's width; it does not write your configuration file.
@@ -210,7 +210,7 @@ Editing the listing changes names and creates new empty files/directories—it i
 
 ## Terminal dock
 
-Press Ctrl + backtick, or enter `:term`, to toggle the bottom terminal dock. It starts a real shell in the explorer's directory **at the time the session is created**.
+Click the bottom-left **terminal icon**, press Ctrl + backtick, or enter `:term` to toggle the bottom terminal dock. It starts a real shell in the explorer's directory **at the time the session is created**.
 
 - Return executes the command.
 - `Ctrl-C` interrupts a foreground command.
@@ -218,7 +218,7 @@ Press Ctrl + backtick, or enter `:term`, to toggle the bottom terminal dock. It 
 - `Cmd-V` pastes, using bracketed paste when the terminal application enables it.
 - `Ctrl-W h` / `Ctrl-W l` moves focus back to the editor / explorer.
 
-Hiding the dock keeps the shell session running. Toggling an exited terminal starts a new session. Navigating the explorer does not automatically change an already-running shell's working directory. Closing the application terminates its terminal session.
+Hiding the dock keeps the shell session running. When the shell exits—through `exit` or `Ctrl-D` at an empty prompt—the dock closes automatically. If the terminal had focus, focus returns to the editor; otherwise the current pane keeps focus. Opening the dock again starts a fresh session. `Ctrl-D` handled by a foreground program does not close the dock while the shell is still running. Navigating the explorer does not automatically change an already-running shell's working directory. Closing the application terminates its terminal session.
 
 ## Configuration
 
@@ -344,5 +344,3 @@ cargo build --release --locked
 Tests cover Vim/Unicode editing, document save conflicts, buffer lifecycle, explorer operations and recovery, Markdown projection, configuration, keyboard normalization, and terminal behavior. Tests are not a substitute for native-window interaction checks when changing the UI.
 
 After rebuilding, restart any already-running Rockdown instance to use the updated executable.
-
-![](R0009272.JPG "800px")

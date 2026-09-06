@@ -3,3 +3,4 @@
 .rockdown-trash/
 .rockdown-stage-*/
 .rockdown-save-*
+dist/

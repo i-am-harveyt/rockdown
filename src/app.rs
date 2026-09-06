@@ -261,7 +261,7 @@ impl Workspace {
         }
     }
     fn toggle_terminal(&mut self, cx: &mut Context<Self>) -> Result<()> {
-        if self.terminal.is_none() || self.terminal.as_ref().is_some_and(Terminal::exited) {
+        if self.terminal.is_none() {
             self.terminal = Some(Terminal::spawn(
                 &self.explorer.directory,
                 &self.config.shell,
@@ -284,7 +284,16 @@ impl Workspace {
                                     cx.notify();
                                 }
                             }
-                            !terminal.exited()
+                            if terminal.exited() {
+                                this.terminal_visible = false;
+                                this.terminal = None;
+                                if this.pane == Pane::Terminal {
+                                    this.set_pane(Pane::Editor, cx);
+                                }
+                                cx.notify();
+                                return false;
+                            }
+                            true
                         })
                         .unwrap_or(false);
                     if !running {
@@ -961,6 +970,8 @@ impl Workspace {
                             .flex_shrink_0()
                             .cursor_pointer()
                             .bg(if id == active { background } else { panel })
+                            .hover(|style| style.bg(accent.opacity(0.12)).text_color(accent))
+                            .active(|style| style.bg(accent.opacity(0.22)))
                             .text_color(if id == active { accent } else { muted })
                             .border_b_2()
                             .border_color(if id == active { accent } else { panel })
@@ -983,9 +994,13 @@ impl Workspace {
                                     .items_center()
                                     .justify_center()
                                     .rounded_md()
+                                    .cursor_pointer()
                                     .text_size(px(17.))
                                     .text_color(muted)
-                                    .hover(|style| style.bg(panel).text_color(accent))
+                                    .hover(|style| {
+                                        style.bg(accent.opacity(0.18)).text_color(accent)
+                                    })
+                                    .active(|style| style.bg(accent.opacity(0.3)))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         cx.stop_propagation();
                                         this.close_tab(id, window, cx);
@@ -1004,21 +1019,91 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let accent = self.color(&self.config.theme.accent);
+        let background = self.color(&self.config.theme.background);
+        let foreground = self.color(&self.config.theme.foreground);
         div()
             .id(action)
-            .px_2()
-            .py_1()
+            .w(px(30.))
+            .h(px(28.))
+            .flex()
+            .items_center()
+            .justify_center()
             .rounded_md()
             .flex_shrink_0()
             .cursor_pointer()
+            .bg(if selected {
+                accent.opacity(0.1)
+            } else {
+                transparent_black()
+            })
             .text_color(self.color(if selected {
                 &self.config.theme.accent
             } else {
                 &self.config.theme.muted
             }))
-            .hover(|style| style.text_color(accent))
+            .hover(|style| style.bg(accent.opacity(0.2)).text_color(accent))
+            .active(|style| style.bg(accent.opacity(0.3)))
+            .tooltip(move |_, cx| {
+                cx.new(|_| ControlTooltip {
+                    label,
+                    background,
+                    foreground,
+                    border: accent.opacity(0.3),
+                })
+                .into()
+            })
             .on_click(cx.listener(move |this, _, window, cx| this.run_action(action, window, cx)))
-            .child(label)
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, _| {
+                        let p = |x, y| bounds.origin + point(px(x), px(y));
+                        let mut path = PathBuilder::stroke(px(1.5));
+                        match action {
+                            "terminal" => {
+                                path.move_to(p(2., 3.));
+                                path.line_to(p(18., 3.));
+                                path.line_to(p(18., 17.));
+                                path.line_to(p(2., 17.));
+                                path.close();
+                                path.move_to(p(5., 7.));
+                                path.line_to(p(8., 10.));
+                                path.line_to(p(5., 13.));
+                                path.move_to(p(10., 13.));
+                                path.line_to(p(15., 13.));
+                            }
+                            "explorer" => {
+                                path.move_to(p(2., 5.));
+                                path.line_to(p(8., 5.));
+                                path.line_to(p(10., 7.));
+                                path.line_to(p(18., 7.));
+                                path.line_to(p(18., 16.));
+                                path.line_to(p(2., 16.));
+                                path.close();
+                            }
+                            "help" => {
+                                path.move_to(p(10., 2.));
+                                path.cubic_bezier_to(p(18., 10.), p(14.4, 2.), p(18., 5.6));
+                                path.cubic_bezier_to(p(10., 18.), p(18., 14.4), p(14.4, 18.));
+                                path.cubic_bezier_to(p(2., 10.), p(5.6, 18.), p(2., 14.4));
+                                path.cubic_bezier_to(p(10., 2.), p(2., 5.6), p(5.6, 2.));
+                                path.close();
+                                path.move_to(p(7.5, 7.));
+                                path.cubic_bezier_to(p(12.5, 7.), p(7.5, 4.5), p(12.5, 4.5));
+                                path.cubic_bezier_to(p(10., 11.5), p(12.5, 9.5), p(10., 9.));
+                                path.move_to(p(10., 14.));
+                                path.line_to(p(10., 15.));
+                            }
+                            _ => unreachable!("unknown dock control"),
+                        }
+                        window.paint_path(
+                            path.build().expect("valid control icon"),
+                            window.text_style().color,
+                        );
+                    },
+                )
+                .size(px(20.)),
+            )
     }
     fn surface(&self, pane: Pane, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -1144,7 +1229,7 @@ impl Render for Workspace {
                         .child(div().px_3().pb_2().text_xs().text_color(muted).overflow_hidden().child(self.explorer.directory.display().to_string()))
                         .child(div().flex_1().min_h_0().child(self.surface(Pane::Explorer,cx)))))))
             .when(self.terminal_visible, |root| root.child(div().h(px(self.config.terminal_height)).flex_shrink_0().flex().flex_col().border_t_1().border_color(accent).bg(background)
-                .child(div().h(px(28.)).flex_shrink_0().px_4().text_sm().text_color(muted).child(if self.terminal.as_ref().is_some_and(Terminal::exited) { "TERMINAL · exited · toggle to restart" } else { "TERMINAL · Ctrl-` hide · Ctrl-W h/l change focus" }))
+                .child(div().h(px(28.)).flex_shrink_0().px_4().text_sm().text_color(muted).child("TERMINAL · Ctrl-` hide · Ctrl-W h/l change focus"))
                 .child(div().flex_1().min_h_0().child(self.surface(Pane::Terminal,cx)))))
             .when(self.help, |root| root.child(div().id("help-sheet").absolute().inset_0().m_8().p_6().bg(panel).border_1().border_color(accent).rounded_lg().overflow_y_scroll().flex().flex_col().gap_2()
                 .child(div().text_xl().text_color(accent).child("Rockdown · keyboard guide"))
@@ -1154,12 +1239,34 @@ impl Render for Workspace {
                 .children(HELP.lines().map(|line| div().flex_shrink_0().text_sm().child(line.to_string())))
                 .child(div().flex_shrink_0().text_sm().child("Prose wraps. Local images render inline; remote images stay linked alt text (no network requests)."))))
             .child(div().h(px(34.)).flex_shrink_0().px_2().flex().items_center().gap_3().bg(panel).text_xs()
-                .child(self.dock_button("Terminal", "terminal", self.terminal_visible, cx))
+                .child(self.dock_button(if self.terminal_visible { "Hide Terminal" } else { "Show Terminal" }, "terminal", self.terminal_visible, cx))
                 .child(div().flex_shrink_0().text_color(accent).font_weight(FontWeight::BOLD).child(mode))
                 .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().child(status))
                 .child(div().flex_shrink_0().text_color(muted).child(location))
                 .child(self.dock_button(explorer_label, "explorer", self.explorer_visible, cx))
-                .child(self.dock_button("Help", "help", self.help, cx)))
+                .child(self.dock_button(if self.help { "Hide Help" } else { "Show Help" }, "help", self.help, cx)))
+    }
+}
+
+struct ControlTooltip {
+    label: &'static str,
+    background: Hsla,
+    foreground: Hsla,
+    border: Hsla,
+}
+
+impl Render for ControlTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(self.border)
+            .bg(self.background)
+            .text_color(self.foreground)
+            .text_size(px(12.))
+            .child(self.label)
     }
 }
 
