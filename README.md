@@ -25,6 +25,8 @@ Rockdown uses **line-based live preview** for `.md` files (case-insensitive) and
 
 The macOS build enables GPUI's runtime shader compilation, so a separate Xcode Metal compiler toolchain is not required.
 
+Release builds optimize for size (`opt-level = "s"`) with full link-time optimization, one codegen unit, and stripped symbols. Full LTO can increase build time; panic unwinding remains enabled. Markdown and syntax-highlighting dependencies enable only the features needed by the editor, retaining bundled grammars and themes.
+
 From the repository root:
 
 ```sh
