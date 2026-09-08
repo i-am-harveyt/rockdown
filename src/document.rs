@@ -144,6 +144,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     if result.is_err() {
         // Copied read-only attributes must not prevent cleanup after a failed save.
         #[cfg(windows)]
+        #[allow(clippy::permissions_set_readonly_false)]
         if let Ok(metadata) = fs::metadata(&temporary) {
             let mut permissions = metadata.permissions();
             if permissions.readonly() {
@@ -309,6 +310,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[allow(clippy::permissions_set_readonly_false)]
     fn failed_readonly_save_removes_readonly_temporary() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("readonly.md");

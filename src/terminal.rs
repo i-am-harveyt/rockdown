@@ -491,20 +491,20 @@ impl Drop for Terminal {
         self.output.take();
         self.writer.take();
         let handle = self.child.as_raw_handle();
-        if !self.child_exited {
-            if let Some(handle) = handle {
-                // The child owns this handle throughout shutdown. Avoid the
-                // backend's kill(), which discards TerminateProcess failures.
-                unsafe { TerminateProcess(handle, 1) };
-            }
+        if !self.child_exited
+            && let Some(handle) = handle
+        {
+            // The child owns this handle throughout shutdown. Avoid the
+            // backend's kill(), which discards TerminateProcess failures.
+            unsafe { TerminateProcess(handle, 1) };
         }
         self.windows.shutdown();
-        if !self.child_exited {
-            if let Some(handle) = handle {
-                // Never do an infinite wait if termination failed. Windows
-                // releases process resources when the owned child handle drops.
-                unsafe { WaitForSingleObject(handle, 5000) };
-            }
+        if !self.child_exited
+            && let Some(handle) = handle
+        {
+            // Never do an infinite wait if termination failed. Windows
+            // releases process resources when the owned child handle drops.
+            unsafe { WaitForSingleObject(handle, 5000) };
         }
     }
 }
