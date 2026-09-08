@@ -34,13 +34,45 @@ struct Fingerprint {
     modified: Option<SystemTime>,
     #[cfg(unix)]
     identity: (u64, u64, i64, i64, u32),
+    #[cfg(windows)]
+    identity: (u32, u64),
+    #[cfg(windows)]
+    creation_time: u64,
+    #[cfg(windows)]
+    attributes: u32,
 }
 
 impl Fingerprint {
-    fn new(metadata: &Metadata) -> Self {
+    fn read(path: &Path) -> Result<Self> {
+        #[cfg(not(windows))]
+        let metadata = fs::symlink_metadata(path)?;
+        #[cfg(windows)]
+        let (metadata, info) = {
+            use std::os::windows::fs::OpenOptionsExt;
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{
+                BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+                FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+                GetFileInformationByHandle,
+            };
+
+            // Query the entry itself, including directory junctions, without opening its target.
+            let file = fs::OpenOptions::new()
+                .access_mode(0)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)?;
+            let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+            if unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) } == 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            (file.metadata()?, unsafe { info.assume_init() })
+        };
         let file_type = metadata.file_type();
         let kind = if file_type.is_symlink() {
             Kind::Symlink
+        } else if is_reparse_point(&metadata) {
+            Kind::Other
         } else if file_type.is_dir() {
             Kind::Directory
         } else if file_type.is_file() {
@@ -48,7 +80,7 @@ impl Fingerprint {
         } else {
             Kind::Other
         };
-        Self {
+        Ok(Self {
             kind,
             len: metadata.len(),
             modified: metadata.modified().ok(),
@@ -63,7 +95,31 @@ impl Fingerprint {
                     metadata.mode(),
                 )
             },
-        }
+            #[cfg(windows)]
+            identity: (
+                info.dwVolumeSerialNumber,
+                (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+            ),
+            #[cfg(windows)]
+            creation_time: (u64::from(info.ftCreationTime.dwHighDateTime) << 32)
+                | u64::from(info.ftCreationTime.dwLowDateTime),
+            #[cfg(windows)]
+            attributes: info.dwFileAttributes,
+        })
+    }
+}
+
+fn is_reparse_point(metadata: &Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
     }
 }
 
@@ -143,18 +199,18 @@ impl Explorer {
             return Ok(None);
         };
         let path = self.directory.join(&entry.name);
-        let actual = fs::symlink_metadata(&path)
+        let actual = Fingerprint::read(&path)
             .with_context(|| format!("Cannot inspect {}", path.display()))?;
-        if Fingerprint::new(&actual) != entry.fingerprint {
+        if actual != entry.fingerprint {
             bail!(
                 "{} changed externally; reload the explorer first",
                 path.display()
             );
         }
-        if actual.is_dir() || (actual.file_type().is_symlink() && path.is_dir()) {
+        if actual.kind == Kind::Directory || (actual.kind == Kind::Symlink && path.is_dir()) {
             self.navigate(&path)?;
             Ok(None)
-        } else if actual.is_file() || actual.file_type().is_symlink() {
+        } else if matches!(actual.kind, Kind::File | Kind::Symlink) {
             Ok(Some(path))
         } else {
             bail!("{} is not a regular file or directory", path.display());
@@ -364,7 +420,7 @@ impl Explorer {
 
     fn desired(&self) -> Result<Vec<Desired>> {
         let mut desired = Vec::new();
-        let mut names = HashSet::new();
+        let mut names: HashSet<String> = HashSet::new();
         let mut ids = HashSet::new();
         for line in &self.buffer.lines {
             if !ids.insert(line.id) {
@@ -374,6 +430,12 @@ impl Explorer {
                 continue;
             }
             let (name, directory) = parse_name(&line.text)?;
+            #[cfg(windows)]
+            for previous in &names {
+                if windows_names_equal(name, previous)? {
+                    bail!("Duplicate explorer destination: {name}");
+                }
+            }
             if !names.insert(name.to_owned()) {
                 bail!("Duplicate explorer destination: {name}");
             }
@@ -445,11 +507,87 @@ fn same_restored_entry(before: &Fingerprint, after: &Fingerprint) -> bool {
                 && before.identity.1 == after.identity.1
                 && before.identity.4 == after.identity.4
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            before.identity == after.identity
+                && before.creation_time == after.creation_time
+                && before.attributes == after.attributes
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             true
         }
     }
+}
+
+fn reserved_name(name: &str) -> Result<bool> {
+    #[cfg(windows)]
+    {
+        let prefix: String = name.chars().take(".rockdown-stage".len()).collect();
+        Ok(windows_names_equal(name, TRASH)? || windows_names_equal(&prefix, ".rockdown-stage")?)
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(name == TRASH)
+    }
+}
+
+#[cfg(windows)]
+fn windows_names_equal(left: &str, right: &str) -> Result<bool> {
+    use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+    let left: Vec<u16> = left.encode_utf16().collect();
+    let right: Vec<u16> = right.encode_utf16().collect();
+    // Use Windows' ordinal case mapping, not Unicode's expanding lowercase mappings.
+    let result = unsafe {
+        CompareStringOrdinal(
+            left.as_ptr(),
+            left.len().try_into()?,
+            right.as_ptr(),
+            right.len().try_into()?,
+            1,
+        )
+    };
+    if result == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(result == CSTR_EQUAL)
+}
+
+#[cfg(windows)]
+fn invalid_windows_name(name: &str) -> bool {
+    if name.ends_with(['.', ' '])
+        || name
+            .chars()
+            .any(|c| c <= '\u{1f}' || "\\:<>\"|?*".contains(c))
+        || name.encode_utf16().count() > 255
+    {
+        return true;
+    }
+    // Device names remain reserved with extensions, including the superscript digits.
+    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+    let stem = stem.to_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
+    ) || stem
+        .strip_prefix("COM")
+        .or_else(|| stem.strip_prefix("LPT"))
+        .is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "1" | "2"
+                    | "3"
+                    | "4"
+                    | "5"
+                    | "6"
+                    | "7"
+                    | "8"
+                    | "9"
+                    | "\u{b9}"
+                    | "\u{b2}"
+                    | "\u{b3}"
+            )
+        })
 }
 
 fn parse_name(text: &str) -> Result<(&str, bool)> {
@@ -462,7 +600,7 @@ fn parse_name(text: &str) -> Result<(&str, bool)> {
     if name.is_empty()
         || name == "."
         || name == ".."
-        || name == TRASH
+        || reserved_name(name)?
         || name.contains(['/', '\0', '\n', '\r'])
         || Path::new(name).components().count() != 1
         || !matches!(
@@ -473,6 +611,10 @@ fn parse_name(text: &str) -> Result<(&str, bool)> {
         bail!(
             "Invalid explorer filename {text:?}; use a single name, with an optional trailing slash for a directory"
         );
+    }
+    #[cfg(windows)]
+    if invalid_windows_name(name) {
+        bail!("Invalid Windows explorer filename {text:?}");
     }
     Ok((name, directory))
 }
@@ -494,12 +636,12 @@ fn read_directory(directory: &Path, ignore: Option<&Path>) -> Result<BTreeMap<St
                 directory.display()
             )
         })?;
-        if name == TRASH {
+        if reserved_name(name)? {
             continue;
         }
         parse_name(name)
             .with_context(|| format!("Cannot represent filename {name:?} in explorer"))?;
-        let fingerprint = Fingerprint::new(&fs::symlink_metadata(item.path())?);
+        let fingerprint = Fingerprint::read(&item.path())?;
         entries.insert(
             name.to_owned(),
             Entry {
@@ -539,9 +681,12 @@ fn ensure_trash_directory(path: &Path) -> Result<()> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == ErrorKind::AlreadyExists => {
             let metadata = fs::symlink_metadata(path)?;
-            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            if !metadata.is_dir()
+                || metadata.file_type().is_symlink()
+                || is_reparse_point(&metadata)
+            {
                 bail!(
-                    "Refusing unsafe trash location {}; it must be a real directory, not a symlink",
+                    "Refusing unsafe trash location {}; it must be a real directory, not a symlink or reparse point",
                     path.display()
                 );
             }
@@ -578,6 +723,23 @@ fn unique_directory(parent: &Path, prefix: &str) -> Result<PathBuf> {
 }
 
 fn move_without_overwrite(source: &Path, destination: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+        let from = windows_path(source)?;
+        let to = windows_path(destination)?;
+        // No REPLACE_EXISTING or COPY_ALLOWED: never clobber or fall back to copy/delete.
+        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } == 0 {
+            return Err(std::io::Error::last_os_error()).with_context(|| {
+                format!(
+                    "Cannot move {} to {} without overwriting",
+                    source.display(),
+                    destination.display()
+                )
+            });
+        }
+        Ok(())
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         use std::ffi::CString;
@@ -608,11 +770,22 @@ fn move_without_overwrite(source: &Path, destination: &Path) -> Result<()> {
         }
         Ok(())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         let _ = (source, destination);
-        bail!("Safe explorer commits require macOS or Linux")
+        bail!("Safe explorer commits require macOS, Linux, or Windows")
     }
+}
+
+#[cfg(windows)]
+fn windows_path(path: &Path) -> Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        bail!("Windows explorer path contains a NUL: {}", path.display());
+    }
+    wide.push(0);
+    Ok(wide)
 }
 
 fn rollback(operations: &mut [Operation]) -> Vec<String> {
@@ -855,9 +1028,343 @@ mod tests {
 
     #[test]
     fn rejects_multiline_names() {
+        assert!(parse_name("two\nlines").is_err());
+        // Win32 rejects this name before the explorer can enumerate it.
+        #[cfg(not(windows))]
+        {
+            let sandbox = Sandbox::new();
+            fs::write(sandbox.0.join("two\nlines"), "").unwrap();
+            assert!(Explorer::open(&sandbox.0).is_err());
+        }
+    }
+
+    #[test]
+    fn no_replace_moves_preserve_existing_files_and_directories() {
         let sandbox = Sandbox::new();
-        fs::write(sandbox.0.join("two\nlines"), "").unwrap();
-        assert!(Explorer::open(&sandbox.0).is_err());
+        for directory in [false, true] {
+            let source = sandbox
+                .0
+                .join(if directory { "source-dir" } else { "source" });
+            let destination = sandbox
+                .0
+                .join(if directory { "target-dir" } else { "target" });
+            if directory {
+                fs::create_dir(&source).unwrap();
+                fs::create_dir(&destination).unwrap();
+                fs::write(source.join("contents"), "source").unwrap();
+            } else {
+                fs::write(&source, "source").unwrap();
+                fs::write(&destination, "external").unwrap();
+            }
+            assert!(move_without_overwrite(&source, &destination).is_err());
+            if directory {
+                assert_eq!(
+                    fs::read_to_string(source.join("contents")).unwrap(),
+                    "source"
+                );
+                assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+                fs::remove_dir(&destination).unwrap();
+            } else {
+                assert_eq!(fs::read_to_string(&source).unwrap(), "source");
+                assert_eq!(fs::read_to_string(&destination).unwrap(), "external");
+                fs::remove_file(&destination).unwrap();
+            }
+            move_without_overwrite(&source, &destination).unwrap();
+            assert!(!source.exists());
+            let contents = if directory {
+                destination.join("contents")
+            } else {
+                destination
+            };
+            assert_eq!(fs::read_to_string(contents).unwrap(), "source");
+        }
+    }
+
+    #[test]
+    fn case_only_renames_use_staging_for_files_and_directories() {
+        let sandbox = Sandbox::new();
+        fs::write(sandbox.0.join("file"), "contents").unwrap();
+        fs::create_dir(sandbox.0.join("folder")).unwrap();
+        fs::write(sandbox.0.join("folder/child"), "child").unwrap();
+        let mut explorer = Explorer::open(&sandbox.0).unwrap();
+        rename_line(&mut explorer, "file", "FILE");
+        rename_line(&mut explorer, "folder/", "FOLDER/");
+        let report = explorer.commit().unwrap();
+        assert_eq!(report.renamed.len(), 2);
+        assert_eq!(explorer.buffer.text(), "FOLDER/\nFILE");
+        assert_eq!(
+            fs::read_to_string(sandbox.0.join("FILE")).unwrap(),
+            "contents"
+        );
+        assert_eq!(
+            fs::read_to_string(sandbox.0.join("FOLDER/child")).unwrap(),
+            "child"
+        );
+        assert_eq!(fs::read_dir(&sandbox.0).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn rollback_preserves_external_obstacles_and_staged_recovery_data() {
+        let sandbox = Sandbox::new();
+        let staged = sandbox.0.join("staged");
+        let source = sandbox.0.join("source");
+        fs::write(&staged, "original").unwrap();
+        fs::write(&source, "external").unwrap();
+        let mut operations = [Operation {
+            source: Some(source.clone()),
+            staged: staged.clone(),
+            destination: sandbox.0.join("destination"),
+            directory: false,
+            location: Location::Staged,
+        }];
+        assert_eq!(rollback(&mut operations).len(), 1);
+        assert_eq!(operations[0].location, Location::Staged);
+        assert_eq!(fs::read_to_string(&source).unwrap(), "external");
+        assert_eq!(fs::read_to_string(&staged).unwrap(), "original");
+    }
+
+    #[test]
+    fn rejects_nul_paths_without_moving_the_source() {
+        let sandbox = Sandbox::new();
+        let source = sandbox.0.join("source");
+        let destination = sandbox.0.join("destination");
+        fs::write(&source, "safe").unwrap();
+        assert!(parse_name("destination\0ignored").is_err());
+        assert!(move_without_overwrite(&source, &sandbox.0.join("destination\0ignored")).is_err());
+        assert!(move_without_overwrite(&sandbox.0.join("source\0ignored"), &destination).is_err());
+        assert_eq!(fs::read_to_string(source).unwrap(), "safe");
+        assert!(!destination.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_filename_validation_remains_case_sensitive_and_permissive() {
+        for name in [
+            "CON",
+            "nul.txt",
+            "name:stream",
+            "back\\slash",
+            "trailing.",
+            "trailing ",
+            ".ROCKDOWN-TRASH",
+            ".rockdown-stage-old",
+        ] {
+            assert!(parse_name(name).is_ok(), "rejected {name:?}");
+        }
+        let sandbox = Sandbox::new();
+        fs::write(sandbox.0.join("a"), "A").unwrap();
+        fs::write(sandbox.0.join("b"), "B").unwrap();
+        let mut explorer = Explorer::open(&sandbox.0).unwrap();
+        rename_line(&mut explorer, "b", "A");
+        assert!(explorer.desired().is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_rejects_invalid_and_reserved_names_before_mutation() {
+        let sandbox = Sandbox::new();
+        fs::write(sandbox.0.join("original"), "safe").unwrap();
+        let mut explorer = Explorer::open(&sandbox.0).unwrap();
+        for name in [
+            "CON",
+            "con.txt",
+            "PrN.log",
+            "AUX",
+            "nul.tar.gz",
+            "COM1",
+            "lpt9.txt",
+            "COM\u{b9}.txt",
+            "LPT\u{b2}",
+            "COM\u{b3}",
+            "CONIN$",
+            "conout$.txt",
+            "CLOCK$",
+            "CON .txt",
+            "name:stream",
+            "C:relative",
+            "back\\slash",
+            "a<b",
+            "a>b",
+            "a\"b",
+            "a|b",
+            "a?b",
+            "a*b",
+            "control\u{1f}",
+            "trailing.",
+            "trailing ",
+            ".ROCKDOWN-TRASH",
+            ".Rockdown-Stage",
+            ".ROCKDOWN-STAGE-recovery",
+        ] {
+            for text in [name.to_owned(), format!("{name}/")] {
+                assert!(parse_name(&text).is_err(), "accepted {text:?}");
+            }
+            explorer.buffer.lines[0].text = name.to_owned();
+            assert!(explorer.commit().is_err(), "committed {name:?}");
+            assert_eq!(
+                fs::read_to_string(sandbox.0.join("original")).unwrap(),
+                "safe"
+            );
+            assert_eq!(fs::read_dir(&sandbox.0).unwrap().count(), 1);
+        }
+        assert!(parse_name(&"x".repeat(256)).is_err());
+        assert!(parse_name(&"\u{1f600}".repeat(128)).is_err());
+        for name in [
+            "COM0",
+            "COM10",
+            "LPT0",
+            "console.txt",
+            "auxiliary",
+            "normal name.txt",
+            "\u{e9}.txt",
+        ] {
+            assert!(parse_name(name).is_ok(), "rejected {name:?}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_rejects_case_insensitive_destinations_before_mutation() {
+        let sandbox = Sandbox::new();
+        fs::write(sandbox.0.join("first"), "one").unwrap();
+        fs::write(sandbox.0.join("second"), "two").unwrap();
+        let mut explorer = Explorer::open(&sandbox.0).unwrap();
+        for (left, right) in [
+            ("same", "SAME"),
+            ("\u{e9}.txt", "\u{c9}.txt"),
+            ("first", "FIRST"),
+        ] {
+            explorer.buffer.lines[0].text = left.to_owned();
+            explorer.buffer.lines[1].text = right.to_owned();
+            let error = explorer.commit().unwrap_err();
+            assert!(error.to_string().contains("Duplicate explorer destination"));
+            assert_eq!(fs::read_to_string(sandbox.0.join("first")).unwrap(), "one");
+            assert_eq!(fs::read_to_string(sandbox.0.join("second")).unwrap(), "two");
+            assert_eq!(fs::read_dir(&sandbox.0).unwrap().count(), 2);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_no_replace_preserves_a_case_variant_destination() {
+        let sandbox = Sandbox::new();
+        let source = sandbox.0.join("source");
+        fs::write(&source, "original").unwrap();
+        fs::write(sandbox.0.join("DESTINATION"), "external").unwrap();
+        assert!(move_without_overwrite(&source, &sandbox.0.join("destination")).is_err());
+        assert_eq!(fs::read_to_string(&source).unwrap(), "original");
+        assert_eq!(
+            fs::read_to_string(sandbox.0.join("DESTINATION")).unwrap(),
+            "external"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_hides_and_protects_case_variants_of_recovery_names() {
+        let sandbox = Sandbox::new();
+        fs::create_dir(sandbox.0.join(".ROCKDOWN-TRASH")).unwrap();
+        fs::create_dir(sandbox.0.join(".Rockdown-Stage-recovery")).unwrap();
+        fs::write(sandbox.0.join(".Rockdown-Stage-recovery/precious"), "safe").unwrap();
+        fs::write(sandbox.0.join("visible"), "delete me").unwrap();
+        let mut explorer = Explorer::open(&sandbox.0).unwrap();
+        assert_eq!(explorer.buffer.text(), "visible");
+        explorer.buffer.lines[0].text.clear();
+        explorer.commit().unwrap();
+        assert_eq!(
+            fs::read_to_string(sandbox.0.join(".Rockdown-Stage-recovery/precious")).unwrap(),
+            "safe"
+        );
+        assert_eq!(explorer.buffer.text(), "");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_preserve_utf16_and_unicode_renames() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+        let raw = OsString::from_wide(&[b'x' as u16, 0xd800]);
+        assert_eq!(
+            windows_path(Path::new(&raw)).unwrap(),
+            [b'x' as u16, 0xd800, 0]
+        );
+        let sandbox = Sandbox::new();
+        fs::write(sandbox.0.join("\u{e9}-\u{1f600}"), "contents").unwrap();
+        let mut explorer = Explorer::open(&sandbox.0).unwrap();
+        rename_line(&mut explorer, "\u{e9}-\u{1f600}", "\u{c9}-\u{1f600}");
+        explorer.commit().unwrap();
+        assert_eq!(explorer.buffer.text(), "\u{c9}-\u{1f600}");
+        assert_eq!(
+            fs::read_to_string(sandbox.0.join("\u{c9}-\u{1f600}")).unwrap(),
+            "contents"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_fingerprint_detects_same_length_and_mtime_replacement() {
+        let sandbox = Sandbox::new();
+        let retained = Sandbox::new();
+        let path = sandbox.0.join("original");
+        fs::write(&path, "before").unwrap();
+        let mut explorer = Explorer::open(&sandbox.0).unwrap();
+        let before = explorer.snapshot["original"].fingerprint.clone();
+        fs::rename(&path, retained.0.join("original")).unwrap();
+        fs::write(&path, "after!").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(before.modified.unwrap()))
+            .unwrap();
+        let mut after = Fingerprint::read(&path).unwrap();
+        assert_eq!(before.len, after.len);
+        assert_eq!(before.modified, after.modified);
+        assert_ne!(before.identity, after.identity);
+        // Identity still detects replacement if creation timestamps happen to match.
+        after.creation_time = before.creation_time;
+        assert!(!same_restored_entry(&before, &after));
+        explorer.adopt_rolled_back_snapshot();
+        assert_eq!(explorer.snapshot["original"].fingerprint, before);
+        assert!(explorer.enter().is_err());
+        rename_line(&mut explorer, "original", "renamed");
+        assert!(explorer.commit().is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), "after!");
+        assert!(!sandbox.0.join("renamed").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reparse_fingerprints_and_trash_never_follow_targets() {
+        let sandbox = Sandbox::new();
+        let target = Sandbox::new();
+        let link = sandbox.0.join(".ROCKDOWN-TRASH");
+        if let Err(error) = std::os::windows::fs::symlink_dir(&target.0, &link) {
+            if error.raw_os_error() == Some(1314) {
+                eprintln!(
+                    "Skipping symlink test: enable Windows Developer Mode or symlink privilege"
+                );
+                return;
+            }
+            panic!("Cannot create test symlink: {error}");
+        }
+        let before = Fingerprint::read(&link).unwrap();
+        assert_eq!(before.kind, Kind::Symlink);
+        fs::write(target.0.join("precious"), "safe").unwrap();
+        assert_eq!(Fingerprint::read(&link).unwrap(), before);
+        assert!(ensure_trash_directory(&link).is_err());
+        fs::write(sandbox.0.join("original"), "safe").unwrap();
+        let mut explorer = Explorer::open(&sandbox.0).unwrap();
+        explorer.buffer.lines[0].text.clear();
+        assert!(explorer.commit().is_err());
+        assert_eq!(
+            fs::read_to_string(sandbox.0.join("original")).unwrap(),
+            "safe"
+        );
+        assert_eq!(
+            fs::read_to_string(target.0.join("precious")).unwrap(),
+            "safe"
+        );
     }
 
     #[test]
@@ -866,6 +1373,7 @@ mod tests {
         let staging = unique_directory(&sandbox.0, ".stage").unwrap();
         fs::write(sandbox.0.join("a"), "A").unwrap();
         fs::write(sandbox.0.join("b"), "B").unwrap();
+        let before = Fingerprint::read(&sandbox.0.join("a")).unwrap();
         fs::rename(sandbox.0.join("a"), staging.join("0")).unwrap();
         fs::rename(sandbox.0.join("b"), staging.join("1")).unwrap();
         fs::rename(staging.join("0"), sandbox.0.join("b")).unwrap();
@@ -888,6 +1396,10 @@ mod tests {
         assert!(rollback(&mut operations).is_empty());
         assert_eq!(fs::read_to_string(sandbox.0.join("a")).unwrap(), "A");
         assert_eq!(fs::read_to_string(sandbox.0.join("b")).unwrap(), "B");
+        assert!(same_restored_entry(
+            &before,
+            &Fingerprint::read(&sandbox.0.join("a")).unwrap()
+        ));
     }
 
     #[test]

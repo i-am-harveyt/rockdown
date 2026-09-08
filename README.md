@@ -20,8 +20,9 @@ Rockdown uses **line-based live preview** for `.md` files (case-insensitive) and
 - A recent Rust toolchain with Cargo and Rust 2024 edition support.
 - Native development tools required by GPUI and its dependencies.
 - On macOS, Xcode Command Line Tools. Install them with `xcode-select --install` if needed.
+- On Windows, Windows 10 version 1809 or newer (or Windows 11), the Rust MSVC toolchain, and Visual Studio Build Tools with **Desktop development with C++** and a Windows 10/11 SDK. The SDK provides GPUI's `fxc.exe` shader compiler.
 
-**Platform status:** development and native-window verification have been performed on macOS Apple Silicon. The code includes Linux PTY and filesystem support, but Linux builds and UI behavior have not been verified here. Linux may require additional GPUI system dependencies and an installed monospace font. Windows is not currently supported by the embedded terminal and explorer commit implementation.
+**Platform status:** development and native-window verification have been performed on macOS Apple Silicon. Windows support uses GPUI's native backend, ConPTY for the embedded terminal, and Windows filesystem operations for explorer commits. CI is configured to test and build Windows x64 and macOS; native Windows UI behavior has not been verified on this development machine. Linux builds and UI behavior also remain unverified here and may require additional GPUI system dependencies and an installed monospace font.
 
 The macOS build enables GPUI's runtime shader compilation, so a separate Xcode Metal compiler toolchain is not required.
 
@@ -49,6 +50,30 @@ cargo run --release -- /path/to/notes
 ```
 
 Passing a nonexistent filename starts an empty buffer at that path, provided its parent directory exists. The file is created when you save it.
+
+### Windows quick start
+
+Extract the Windows release archive, then launch `rockdown.exe`, or run it from PowerShell with a file or notes directory:
+
+```powershell
+.\rockdown.exe "$HOME\Documents\Notes"
+```
+
+To build from source, open **Developer PowerShell for Visual Studio** in the repository root:
+
+```powershell
+rustup default stable-x86_64-pc-windows-msvc
+# Select the shader compiler from the SDK initialized by Developer PowerShell.
+$env:GPUI_FXC_PATH = Join-Path $env:WindowsSdkVerBinPath 'x64\fxc.exe'
+cargo build --release --locked
+.\target\release\rockdown.exe "$HOME\Documents\Notes"
+```
+
+If `WindowsSdkVerBinPath` is unavailable, set `GPUI_FXC_PATH` to the installed SDK's `fxc.exe`, usually under `C:\Program Files (x86)\Windows Kits\10\bin\<SDK version>\x64\`. No Unix shell or WSL is required. Use a directory that already exists.
+
+Windows defaults to **Consolas**, reads settings from `%APPDATA%\rockdown\config.toml`, and starts `%COMSPEC%` (normally Command Prompt) in the terminal. To use PowerShell, set `shell = 'powershell.exe'` or `shell = 'C:\Program Files\PowerShell\7\pwsh.exe'` in your TOML config. Single-quoted TOML strings keep Windows backslashes literal. The shell setting accepts an executable path, not arguments.
+
+Use **Ctrl-C / Ctrl-V** for clipboard operations in the editor and explorer, and **Ctrl-Shift-V** to paste in the terminal. Terminal **Ctrl-C** remains an interrupt. Type `exit` to close Command Prompt or PowerShell.
 
 ### Command-line options
 
@@ -85,7 +110,8 @@ Press **F1** or enter `:help` for the in-app keyboard guide. Press `Esc` to dism
 | `Ctrl-W h` | Focus the editor. |
 | `Ctrl-W l` | Reveal and focus the explorer without toggling it closed. |
 | `Ctrl-W j` | Reveal and focus the terminal. |
-| `Cmd-1` | Focus the editor. |
+| `Cmd-1` / `Ctrl-1` | Focus the editor. |
+| `Ctrl-Shift-V` | Paste from the clipboard in any pane. |
 | Ctrl + backtick | Toggle the terminal dock. |
 | `Ctrl-PageUp` / `Ctrl-PageDown` | Previous / next editor buffer. |
 | `Cmd-W` / `Ctrl-Shift-W` | Close the current editor buffer, refusing unsaved changes. |
@@ -116,7 +142,7 @@ You can also click a pane to focus it. The **terminal icon** is at the bottom-le
 | `/text`, then Return | Search forward for literal text. |
 | `n` | Find the next match. |
 
-Counts work with supported motions and operators, such as `3j` or `2dd`. In Visual mode, use `y`, `d`, or `c` to yank, delete, or change the selection. `Cmd-C` copies a visual selection to the system clipboard; `Cmd-V` pastes clipboard text.
+Counts work with supported motions and operators, such as `3j` or `2dd`. In Visual mode, use `y`, `d`, or `c` to yank, delete, or change the selection. `Ctrl-C` copies a visual selection to the system clipboard; `Ctrl-V` pastes clipboard text. On macOS, use `Cmd-C` / `Cmd-V` instead. `Ctrl-Shift-V` pastes on all platforms.
 
 The editor and file explorer share the **system clipboard** for Vim operations: `y`/`yy` copy text, and `p`/`P` paste the current clipboard after/before the cursor. This also works across buffers and after explorer navigation or refresh. Linewise yanks paste as whole lines; characterwise yanks stay inline. Text copied from another application replaces the previous yank. As with Vim's unnamed register, delete/change operations also copy the removed text. Explorer yanks copy the displayed filename, not the file's contents.
 
@@ -157,6 +183,8 @@ Enter these commands from Normal mode. Focus the editor first with `Ctrl-W h`; `
 Relative paths in `:e` and `:w` are resolved against the **current explorer directory**. Saving does not create missing parent directories.
 
 Saves check for external file changes instead of silently overwriting them. If a conflict is reported, inspect the disk version before choosing `:e!` to reload or `:w!` to overwrite. Saving over a file owned by another open buffer is refused even with `:w!`.
+
+Existing LF or CRLF line endings and UTF-8 BOMs are preserved when saving. Editing and clipboard paste use normalized newlines internally. New documents without an existing newline style use CRLF on Windows and LF elsewhere. Mixed-ending files are normalized to the first newline's style on save.
 
 ## Buffer management
 
@@ -216,8 +244,8 @@ Click the bottom-left **terminal icon**, press Ctrl + backtick, or enter `:term`
 
 - Return executes the command.
 - `Ctrl-C` interrupts a foreground command.
-- `Ctrl-D` sends end-of-input; at an empty shell prompt this usually exits the shell.
-- `Cmd-V` pastes, using bracketed paste when the terminal application enables it.
+- `Ctrl-D` sends end-of-input in Unix shells; at an empty Unix shell prompt this usually exits the shell. In Windows shells, use `exit` instead.
+- `Ctrl-Shift-V` (or `Cmd-V` on macOS) pastes, using bracketed paste when the terminal application enables it.
 - `Ctrl-W h` / `Ctrl-W l` moves focus back to the editor / explorer.
 
 Hiding the dock keeps the shell session running. When the shell exits—through `exit` or `Ctrl-D` at an empty prompt—the dock closes automatically. If the terminal had focus, focus returns to the editor; otherwise the current pane keeps focus. Opening the dock again starts a fresh session. `Ctrl-D` handled by a foreground program does not close the dock while the shell is still running. Navigating the explorer does not automatically change an already-running shell's working directory. Closing the application terminates its terminal session.
@@ -228,7 +256,7 @@ Rockdown loads configuration in this order:
 
 1. The file explicitly supplied with `--config PATH`.
 2. Otherwise, `config.toml` under `$XDG_CONFIG_HOME/rockdown/`.
-3. If `XDG_CONFIG_HOME` is unset, that directory is `~/.config/rockdown/`.
+3. If `XDG_CONFIG_HOME` is unset or empty, use `%APPDATA%\rockdown\` on Windows (falling back to `%USERPROFILE%\AppData\Roaming\rockdown\`), or `~/.config/rockdown/` on Unix.
 4. If no config file exists, built-in defaults are used.
 
 An invalid selected config produces an error on startup or reload. Project-local config is not loaded automatically.
@@ -257,12 +285,12 @@ A complete example, including the default shortcut map, is provided in [`example
 
 | Setting | Default | Notes |
 | --- | --- | --- |
-| `font_family` | `Menlo` | Use a font installed on your system. |
+| `font_family` | `Consolas` on Windows, `Menlo` elsewhere | Use a font installed on your system. |
 | `font_size` | `15` | Range: 10–32. |
 | `line_height` | `30` | At least `font_size + 4`, at most 64. |
 | `explorer_width` | `290` | Configured range: 180–600; display width also respects window size. |
 | `terminal_height` | `240` | Range: 100–600. |
-| `shell` | `$SHELL`, then `/bin/sh` | Shell executable, not a command string with arguments. |
+| `shell` | Windows: `%COMSPEC%`, then `cmd.exe`; Unix: `$SHELL`, then `/bin/sh` | Shell executable, not a command string with arguments. |
 | `theme` | Colors shown above | Six-digit RGB hex colors, with or without `#`. |
 | `markdown` | Inherited colors and built-in heading sizes | Nested appearance settings described below. |
 | `keys` | Built-in shortcuts | Maps GPUI keystrokes to action names. |
@@ -309,6 +337,7 @@ Supported action names are:
 
 ```text
 save
+paste
 explorer
 terminal
 editor

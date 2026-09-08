@@ -64,6 +64,22 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Initialize MSVC and Windows SDK
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Locate Windows shader compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $fxc = Join-Path $env:WindowsSdkVerBinPath 'x64\fxc.exe'
+          if (-not (Test-Path $fxc)) { throw "Windows SDK shader compiler missing: $fxc" }
+          "GPUI_FXC_PATH=$fxc" >> $env:GITHUB_ENV
+
+      - name: Test Windows build
+        if: runner.os == 'Windows'
+        run: cargo test --locked --all-targets --target ${{ matrix.target }}
+
       - name: Build release binary
         if: runner.os == 'Windows'
         run: cargo build --locked --release --target ${{ matrix.target }}

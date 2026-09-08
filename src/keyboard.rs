@@ -1,5 +1,16 @@
 use gpui::Keystroke;
 
+pub(crate) fn clipboard_shortcut(stroke: &Keystroke, terminal: bool) -> bool {
+    let modifiers = stroke.modifiers;
+    !modifiers.alt
+        && !modifiers.shift
+        && (if cfg!(target_os = "macos") {
+            modifiers.platform && !modifiers.control
+        } else {
+            modifiers.control && !modifiers.platform && !terminal
+        })
+}
+
 /// Native macOS events attach key_char="\n" to Return and "\t" to Tab.
 /// Those are commands, not committed IME text; keep their semantic key names.
 pub(crate) fn key(stroke: &Keystroke) -> &str {
@@ -39,6 +50,23 @@ fn named_key(key: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::{terminal::key_bytes, vim::Buffer};
+
+    #[test]
+    fn clipboard_shortcuts_respect_platform_and_terminal_control_keys() {
+        let mut stroke = Keystroke::parse(if cfg!(target_os = "macos") {
+            "cmd-v"
+        } else {
+            "ctrl-v"
+        })
+        .unwrap();
+        assert!(clipboard_shortcut(&stroke, false));
+        assert_eq!(clipboard_shortcut(&stroke, true), cfg!(target_os = "macos"));
+        stroke.modifiers.alt = true;
+        assert!(!clipboard_shortcut(&stroke, false));
+        stroke.modifiers.alt = false;
+        stroke.modifiers.shift = true;
+        assert!(!clipboard_shortcut(&stroke, false));
+    }
 
     #[test]
     fn native_return_splits_editor_line_and_encodes_terminal_submit() {

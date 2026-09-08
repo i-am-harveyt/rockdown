@@ -309,6 +309,35 @@ fn explorer_yank_uses_clipboard_across_panes_and_reload(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn native_clipboard_shortcuts_work_in_editor_and_explorer(cx: &mut TestAppContext) {
+    let (mut window, view) = table_window(cx);
+    window.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "v l cmd-c"
+    } else {
+        "v l ctrl-c"
+    });
+    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "ou");
+    window.simulate_keystrokes("escape ctrl-w l");
+    window.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-v"
+    } else {
+        "ctrl-v"
+    });
+    assert_eq!(
+        window.update(|_, cx| view.read(cx).explorer.buffer.text()),
+        "ou"
+    );
+
+    window.simulate_keystrokes("ctrl-1 0");
+    cx.write_to_clipboard(ClipboardItem::new_string("first\r\nsecond\r\n".into()));
+    window.simulate_keystrokes("ctrl-shift-v");
+    assert_eq!(
+        window.update(|_, cx| view.read(cx).documents.current().buffer.text()),
+        format!("first\nsecond\n{TABLE}")
+    );
+}
+
+#[gpui::test]
 fn vim_paste_uses_latest_clipboard_and_preserves_characterwise_yanks(cx: &mut TestAppContext) {
     let (mut window, view) = table_window(cx);
     window.simulate_keystrokes("v l y");

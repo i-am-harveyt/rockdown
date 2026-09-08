@@ -1,11 +1,15 @@
-# Copy to ~/.config/rockdown/config.toml, or pass --config PATH.
-font_family = "Menlo"
+# Copy to ~/.config/rockdown/config.toml (Unix),
+# or %APPDATA%\rockdown\config.toml (Windows), or pass --config PATH.
+# font_family = "Menlo" # Default: Consolas on Windows, Menlo elsewhere.
 font_size = 15
 line_height = 30
 explorer_width = 290
 terminal_height = 240
 # Toggle the right dock with Ctrl-E; drag its left edge to resize.
 # shell = "/bin/zsh" # Defaults to $SHELL, then /bin/sh.
+# Windows defaults to %COMSPEC%, then cmd.exe. To use PowerShell instead:
+# shell = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+# shell = 'C:\Program Files\PowerShell\7\pwsh.exe'
 
 [theme]
 background = "#171b22"
@@ -62,10 +66,12 @@ thickness = 1.5
 cmd-s = "save"
 ctrl-s = "save"
 cmd-v = "paste"
+ctrl-shift-v = "paste"
 cmd-e = "explorer"
 ctrl-e = "explorer"
 "ctrl-`" = "terminal"
 cmd-1 = "editor"
+ctrl-1 = "editor"
 ctrl-pageup = "previous-buffer"
 ctrl-pagedown = "next-buffer"
 cmd-w = "buffer-delete"

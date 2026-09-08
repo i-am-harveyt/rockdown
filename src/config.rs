@@ -106,22 +106,27 @@ impl Default for Theme {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            font_family: "Menlo".into(),
+            font_family: if cfg!(windows) { "Consolas" } else { "Menlo" }.into(),
             font_size: 15.,
             line_height: 30.,
             explorer_width: 290.,
             terminal_height: 240.,
-            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            shell: std::env::var(if cfg!(windows) { "COMSPEC" } else { "SHELL" })
+                .ok()
+                .filter(|shell| !shell.trim().is_empty())
+                .unwrap_or_else(|| if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }.into()),
             theme: Theme::default(),
             markdown: MarkdownStyle::default(),
             keys: BTreeMap::from([
                 ("cmd-s".into(), "save".into()),
                 ("ctrl-s".into(), "save".into()),
                 ("cmd-v".into(), "paste".into()),
+                ("ctrl-shift-v".into(), "paste".into()),
                 ("cmd-e".into(), "explorer".into()),
                 ("ctrl-e".into(), "explorer".into()),
                 ("ctrl-`".into(), "terminal".into()),
                 ("cmd-1".into(), "editor".into()),
+                ("ctrl-1".into(), "editor".into()),
                 ("ctrl-pageup".into(), "previous-buffer".into()),
                 ("ctrl-pagedown".into(), "next-buffer".into()),
                 ("cmd-w".into(), "buffer-delete".into()),
@@ -138,12 +143,7 @@ impl Config {
         let path = if let Some(path) = explicit {
             Some(path.to_path_buf())
         } else {
-            let base = std::env::var_os("XDG_CONFIG_HOME")
-                .map(PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config"))
-                })
-                .map(|base| base.join("rockdown"));
+            let base = config_base(|name| std::env::var_os(name)).map(|base| base.join("rockdown"));
             base.and_then(|base| {
                 let candidate = base.join("config.toml");
                 candidate.is_file().then_some(candidate)
@@ -245,6 +245,21 @@ impl Config {
     }
 }
 
+fn config_base(mut env: impl FnMut(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let mut get = |name| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    get("XDG_CONFIG_HOME").or_else(|| {
+        if cfg!(windows) {
+            get("APPDATA").or_else(|| get("USERPROFILE").map(|home| home.join("AppData/Roaming")))
+        } else {
+            get("HOME").map(|home| home.join(".config"))
+        }
+    })
+}
+
 pub fn parse_color(value: &str) -> Result<u32> {
     let value = value.strip_prefix('#').unwrap_or(value);
     if value.len() != 6 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -256,6 +271,52 @@ pub fn parse_color(value: &str) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn config_location_uses_native_directories_and_honors_xdg() {
+        let env = BTreeMap::from([
+            ("XDG_CONFIG_HOME", "custom"),
+            ("APPDATA", "roaming"),
+            ("USERPROFILE", "profile"),
+            ("HOME", "home"),
+        ]);
+        assert_eq!(
+            config_base(|name| env.get(name).map(Into::into)),
+            Some(PathBuf::from("custom"))
+        );
+        assert_eq!(
+            config_base(|name| {
+                (name != "XDG_CONFIG_HOME")
+                    .then(|| env.get(name).map(Into::into))
+                    .flatten()
+            }),
+            Some(PathBuf::from(if cfg!(windows) {
+                "roaming"
+            } else {
+                "home/.config"
+            }))
+        );
+        assert_eq!(
+            config_base(|name| match name {
+                "XDG_CONFIG_HOME" | "APPDATA" => Some("".into()),
+                "USERPROFILE" | "HOME" => Some("home".into()),
+                _ => None,
+            }),
+            Some(PathBuf::from(if cfg!(windows) {
+                "home/AppData/Roaming"
+            } else {
+                "home/.config"
+            }))
+        );
+        assert!(config_base(|_| None).is_none());
+        let config = Config::default();
+        config.validate().unwrap();
+        assert_eq!(config.keys["ctrl-shift-v"], "paste");
+        assert_eq!(config.keys["ctrl-1"], "editor");
+        if cfg!(windows) {
+            assert_eq!(config.font_family, "Consolas");
+        }
+    }
+
     #[test]
     fn parses_and_validates_toml_configuration() {
         let config = Config::parse(

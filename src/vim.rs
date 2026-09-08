@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -77,6 +77,7 @@ pub struct Buffer {
 
 impl Buffer {
     pub fn new(text: &str) -> Self {
+        let text = normalize_newlines(text);
         let mut next_id = 1;
         let lines = text
             .split('\n')
@@ -96,7 +97,7 @@ impl Buffer {
             mode: Mode::Normal,
             next_id,
             revision: 0,
-            saved_text: text.to_owned(),
+            saved_text: text.into_owned(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             insert_start: None,
@@ -115,6 +116,7 @@ impl Buffer {
     /// Import clipboard text without treating a paste as a new yank.
     pub fn set_clipboard(&mut self, text: Option<String>, linewise: bool) {
         self.register = text.map(|text| {
+            let text = normalize_newlines(&text);
             if linewise {
                 Register::Lines(
                     text.strip_suffix('\n')
@@ -124,7 +126,7 @@ impl Buffer {
                         .collect(),
                 )
             } else {
-                Register::Characters(text)
+                Register::Characters(text.into_owned())
             }
         });
         self.register_changed = false;
@@ -332,6 +334,7 @@ impl Buffer {
     /// Replace the document as a fresh, saved buffer, retaining IDs for unchanged
     /// prefix/suffix lines and corresponding edited lines in between.
     pub fn set_text(&mut self, text: &str) {
+        let text = normalize_newlines(text);
         let parts: Vec<&str> = text.split('\n').collect();
         if !self
             .lines
@@ -376,7 +379,7 @@ impl Buffer {
                 }
             })
             .collect();
-        self.saved_text = text.to_owned();
+        self.saved_text = text.into_owned();
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.insert_start = None;
@@ -1031,9 +1034,10 @@ impl Buffer {
         if text.is_empty() {
             return;
         }
+        let text = normalize_newlines(text);
         self.bump_revision();
         if !text.contains('\n') {
-            self.lines[self.row].text.insert_str(self.col, text);
+            self.lines[self.row].text.insert_str(self.col, &text);
             self.col = ceil_boundary(&self.lines[self.row].text, self.col + text.len());
             self.preferred_column = None;
             return;
@@ -1306,6 +1310,15 @@ impl Buffer {
     }
 }
 
+fn normalize_newlines(text: &str) -> Cow<'_, str> {
+    // A lone CR is text, not a line separator.
+    if text.contains("\r\n") {
+        Cow::Owned(text.replace("\r\n", "\n"))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
 fn ordered(a: Position, b: Position) -> (Position, Position) {
     if a <= b { (a, b) } else { (b, a) }
 }
@@ -1356,6 +1369,75 @@ mod tests {
     fn keys(buffer: &mut Buffer, keys: &[&str]) {
         for key in keys {
             assert!(buffer.key(key), "unconsumed key: {key}");
+        }
+    }
+
+    #[test]
+    fn crlf_buffers_and_replacements_are_clean_and_keep_lone_cr() {
+        let mut buffer = Buffer::new("one\r\ntwo\rthree\r\nlast\r");
+        assert_eq!(buffer.text(), "one\ntwo\rthree\nlast\r");
+        assert!(!buffer.dirty());
+        let original = buffer.lines.clone();
+        let revision = buffer.revision();
+        buffer.set_text("one\r\ntwo\rthree\r\nlast\r");
+        assert_eq!(buffer.lines, original);
+        assert_eq!(buffer.revision(), revision);
+        buffer.set_text("one\r\nnew\r\ntwo\rthree\r\nlast\r");
+        assert_eq!(buffer.text(), "one\nnew\ntwo\rthree\nlast\r");
+        assert_eq!(buffer.lines[2].id, original[1].id);
+        assert_eq!(buffer.lines[3].id, original[2].id);
+        assert!(!buffer.dirty());
+    }
+
+    #[test]
+    fn literal_crlf_paste_is_one_undo_in_normal_insert_and_visual_modes() {
+        for mode in [Mode::Normal, Mode::Insert, Mode::Visual] {
+            let mut buffer = Buffer::new("ab");
+            let original = buffer.lines.clone();
+            match mode {
+                Mode::Insert => keys(&mut buffer, &["i"]),
+                Mode::Visual => keys(&mut buffer, &["v"]),
+                Mode::Normal => {}
+            }
+            buffer.insert_text("x\r\ny\rz\r\n");
+            keys(&mut buffer, &["escape"]);
+            let expected = if mode == Mode::Visual {
+                "x\ny\rz\nb"
+            } else {
+                "x\ny\rz\nab"
+            };
+            assert_eq!(buffer.text(), expected);
+            assert!(buffer.dirty());
+            buffer.undo();
+            assert_eq!(buffer.lines, original);
+            assert!(!buffer.dirty());
+            buffer.redo();
+            assert_eq!(buffer.text(), expected);
+        }
+    }
+
+    #[test]
+    fn clipboard_register_pastes_normalize_crlf_in_both_register_types() {
+        for linewise in [false, true] {
+            for key in ["p", "P"] {
+                let mut buffer = Buffer::new("ab");
+                let original = buffer.lines.clone();
+                buffer.set_clipboard(Some("x\r\ny\rz\r\n".into()), linewise);
+                assert!(buffer.take_yank().is_none());
+                keys(&mut buffer, &[key]);
+                let expected = match (linewise, key) {
+                    (true, "p") => "ab\nx\ny\rz",
+                    (true, _) => "x\ny\rz\nab",
+                    (false, "p") => "ax\ny\rz\nb",
+                    (false, _) => "x\ny\rz\nab",
+                };
+                assert_eq!(buffer.text(), expected);
+                assert!(buffer.take_yank().is_none());
+                buffer.undo();
+                assert_eq!(buffer.lines, original);
+                buffer.redo();
+                assert_eq!(buffer.text(), expected);
+            }
         }
     }
 
