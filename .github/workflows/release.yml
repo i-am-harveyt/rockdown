@@ -5,9 +5,21 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag to build and release (for example v0.1.0)'
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -18,13 +30,13 @@ jobs:
       matrix:
         include:
           # macOS Apple Silicon (ARM64)
-          - os: macos-latest
+          - os: macos-15
             target: aarch64-apple-darwin
             artifact_name: rockdown-macos-aarch64.zip
             use_app_bundle: true
 
           # macOS Intel (x86_64)
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact_name: rockdown-macos-x86_64.zip
             use_app_bundle: true
@@ -38,6 +50,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" == v* ]] || { echo 'Release tag must start with v'; exit 1; }
+          test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$(git rev-parse HEAD)"
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -45,27 +65,56 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        if: runner.os == 'Windows'
+        run: cargo build --locked --release --target ${{ matrix.target }}
 
-      # Package macOS .app bundle
-      - name: Package macOS App Bundle
+      # All six secrets are required together. With none, produce ad-hoc signed builds.
+      - name: Configure macOS signing and notarization
         if: matrix.use_app_bundle
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
-          APP_NAME="Rockdown.app"
-          APP_DIR="target/bundle/${APP_NAME}"
-          mkdir -p "${APP_DIR}/Contents/MacOS"
-          mkdir -p "${APP_DIR}/Contents/Resources"
-
-          cp "target/${{ matrix.target }}/release/rockdown" "${APP_DIR}/Contents/MacOS/rockdown"
-          chmod +x "${APP_DIR}/Contents/MacOS/rockdown"
-          cp "extra/macos/Info.plist" "${APP_DIR}/Contents/Info.plist"
-
-          if [ -f "extra/macos/Rockdown.icns" ]; then
-            cp "extra/macos/Rockdown.icns" "${APP_DIR}/Contents/Resources/Rockdown.icns"
+          if [[ -z "${APPLE_CERTIFICATE_P12}${APPLE_CERTIFICATE_PASSWORD}${APPLE_SIGNING_IDENTITY}${APPLE_ID}${APPLE_TEAM_ID}${APPLE_APP_SPECIFIC_PASSWORD}" ]]; then
+            echo '::warning::Apple signing secrets are absent. Downloads will not be Gatekeeper-approved.'
+            exit 0
           fi
+          : "${APPLE_CERTIFICATE_P12:?Missing certificate}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Missing certificate password}"
+          : "${APPLE_SIGNING_IDENTITY:?Missing Developer ID Application identity}"
+          : "${APPLE_ID:?Missing Apple ID}"
+          : "${APPLE_TEAM_ID:?Missing team ID}"
+          : "${APPLE_APP_SPECIFIC_PASSWORD:?Missing app-specific password}"
+          KEYCHAIN_PATH="$RUNNER_TEMP/rockdown-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          printf '%s' "$APPLE_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          xcrun notarytool store-credentials rockdown-notary --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --keychain "$KEYCHAIN_PATH"
+          echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
+          echo 'APPLE_NOTARY_PROFILE=rockdown-notary' >> "$GITHUB_ENV"
+          echo "APPLE_NOTARY_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
-          mkdir -p dist
-          (cd target/bundle && zip -q -r "../../dist/${{ matrix.artifact_name }}" "${APP_NAME}")
+      - name: Build and package macOS ZIP and DMG
+        if: matrix.use_app_bundle
+        run: bash scripts/bundle-macos.sh "${{ matrix.target }}"
+
+      - name: Remove macOS signing credentials
+        if: always() && matrix.use_app_bundle
+        run: |
+          if [ -f "$RUNNER_TEMP/rockdown-signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/rockdown-signing.keychain-db"
+          fi
+          rm -f "$RUNNER_TEMP/certificate.p12"
 
       # Package Windows archive
       - name: Package Windows Binary
@@ -83,28 +132,30 @@ jobs:
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: dist/${{ matrix.artifact_name }}
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
 
   release:
     name: Publish Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
+          pattern: '*-*-*'
           merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: release-artifacts/*
+          fail_on_unmatched_files: true
           generate_release_notes: true
           draft: false
           prerelease: false
