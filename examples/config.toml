@@ -66,6 +66,12 @@ thickness = 1.5
 # Supported actions: save, paste (clipboard), explorer (toggle), terminal,
 # editor, help, buffer-delete, previous-buffer, next-buffer.
 [keys]
+cmd-n = "new"
+ctrl-n = "new"
+cmd-o = "open"
+ctrl-o = "open"
+cmd-shift-s = "save-as"
+ctrl-shift-s = "save-as"
 cmd-s = "save"
 ctrl-s = "save"
 cmd-v = "paste"

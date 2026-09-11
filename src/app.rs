@@ -20,6 +20,9 @@ actions!(
     rockdown,
     [
         Save,
+        NewDocument,
+        OpenDocument,
+        SaveAs,
         Paste,
         ExplorerToggle,
         TerminalToggle,
@@ -38,6 +41,9 @@ pub fn bind_config_keys(config: &Config, cx: &mut App) {
     cx.bind_keys(config.keys.iter().filter_map(|(key, action)| {
         let action: Box<dyn Action> = match action.as_str() {
             "save" => Box::new(Save),
+            "new" => Box::new(NewDocument),
+            "open" => Box::new(OpenDocument),
+            "save-as" => Box::new(SaveAs),
             "paste" => Box::new(Paste),
             "explorer" => Box::new(ExplorerToggle),
             "terminal" => Box::new(TerminalToggle),
@@ -68,6 +74,8 @@ impl Pane {
     }
 }
 
+type CloseContinuation = (Option<u64>, Vec<(u64, String)>);
+
 pub struct Workspace {
     pub config: Config,
     pub config_path: Option<PathBuf>,
@@ -91,6 +99,7 @@ pub struct Workspace {
     pub message: String,
     pub help: bool,
     pub marked: Option<Range<usize>>,
+    dialog_pending: bool,
     search: String,
     window_prefix: bool,
     pub follow_cursor: bool,
@@ -136,14 +145,15 @@ impl Workspace {
             row_heights: Default::default(),
             projection,
             command: None,
-            message: if explorer_visible {
-                "i to write  ·  :w filename.md to save  ·  F1 help"
+            message: if cfg!(target_os = "macos") {
+                "i to write  ·  Cmd-S save  ·  F1 help"
             } else {
-                "i to write  ·  :w to save  ·  F1 help"
+                "i to write  ·  Ctrl-S save  ·  F1 help"
             }
             .into(),
             help: false,
             marked: None,
+            dialog_pending: false,
             search: String::new(),
             window_prefix: false,
             follow_cursor: true,
@@ -215,6 +225,228 @@ impl Workspace {
             true
         }
     }
+    fn open_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_pending {
+            return;
+        }
+        self.dialog_pending = true;
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Open document".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                this.dialog_pending = false;
+                match result {
+                    Ok(Ok(Some(paths))) => {
+                        if let Some(path) = paths.first()
+                            && let Err(error) =
+                                this.change_document(|documents| documents.open(path), cx)
+                        {
+                            this.message = format!("{error:#}");
+                        }
+                    }
+                    Ok(Err(error)) => this.message = format!("{error:#}"),
+                    _ => this.message = "Open cancelled".into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn save_dialog(
+        &mut self,
+        id: u64,
+        save_as: bool,
+        close: Option<CloseContinuation>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog_pending {
+            return;
+        }
+        let Some(document) = self.documents.get(id) else {
+            return;
+        };
+        if !save_as && document.path.is_some() {
+            self.finish_save(id, None, close, window, cx);
+            return;
+        }
+        let directory = document
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or(&self.explorer.directory);
+        let name = document
+            .path
+            .as_deref()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .unwrap_or("Untitled.md");
+        let receiver = cx.prompt_for_new_path(directory, Some(name));
+        self.dialog_pending = true;
+        cx.spawn_in(window, async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.dialog_pending = false;
+                match result {
+                    Ok(Ok(Some(path))) => this.finish_save(id, Some(&path), close, window, cx),
+                    Ok(Err(error)) => this.message = format!("{error:#}"),
+                    _ => this.message = "Save cancelled".into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn finish_save(
+        &mut self,
+        id: u64,
+        path: Option<&Path>,
+        close: Option<CloseContinuation>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.documents.save_id(id, path) {
+            Ok(()) => {
+                self.refresh_projection();
+                self.message = format!(
+                    "Saved {}",
+                    self.documents
+                        .get(id)
+                        .and_then(|doc| doc.path.as_ref())
+                        .unwrap()
+                        .display()
+                );
+                if !self.explorer.dirty()
+                    && let Err(error) = self.explorer.reload()
+                {
+                    self.message
+                        .push_str(&format!(" · Files refresh failed: {error:#}"));
+                }
+                if let Some((target, discarded)) = close {
+                    self.request_close(target, discarded, window, cx);
+                }
+            }
+            Err(error) => self.message = format!("{error:#}"),
+        }
+        cx.notify();
+    }
+
+    /// The OS close callback always defers removal to the same guarded workflow as tabs.
+    pub fn request_window_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.request_close(None, Vec::new(), window, cx);
+        false
+    }
+
+    fn request_close(
+        &mut self,
+        target: Option<u64>,
+        discarded: Vec<(u64, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog_pending {
+            return;
+        }
+        let pending = self
+            .documents
+            .entries()
+            .iter()
+            .find(|entry| {
+                target.is_none_or(|id| id == entry.id)
+                    && entry.document.buffer.dirty()
+                    && !discarded.contains(&(entry.id, entry.document.buffer.text()))
+            })
+            .map(|entry| {
+                (
+                    entry.id,
+                    entry.document.buffer.text(),
+                    entry
+                        .document
+                        .path
+                        .as_ref()
+                        .map_or("Untitled".into(), |path| path.display().to_string()),
+                )
+            });
+        // Explorer decisions are explicit: saving staged operations can move or trash files.
+        let pending = pending.or_else(|| {
+            let snapshot = format!(
+                "{}\n{}\n{}",
+                self.explorer.directory.display(),
+                self.explorer.buffer.revision(),
+                self.explorer.buffer.text()
+            );
+            (target.is_none()
+                && self.explorer.dirty()
+                && !discarded.contains(&(0, snapshot.clone())))
+            .then_some((
+                0,
+                snapshot,
+                "staged Files changes (renames, creations and moves to trash)".into(),
+            ))
+        });
+        let Some((id, snapshot, name)) = pending else {
+            if let Some(id) = target {
+                self.delete_tab(id, window, cx);
+            } else {
+                window.remove_window();
+            }
+            return;
+        };
+        let receiver = window.prompt(
+            PromptLevel::Warning,
+            &format!("Save changes to {name}?"),
+            Some("Unsaved changes will be lost if you discard them."),
+            &["Save", "Discard", "Cancel"],
+            cx,
+        );
+        self.dialog_pending = true;
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = receiver.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.dialog_pending = false;
+                match answer {
+                    Ok(0) if id == 0 => {
+                        // Recheck the staged contents before applying the operations that were shown.
+                        let current = format!(
+                            "{}\n{}\n{}",
+                            this.explorer.directory.display(),
+                            this.explorer.buffer.revision(),
+                            this.explorer.buffer.text()
+                        );
+                        if current != snapshot {
+                            this.request_close(target, discarded, window, cx);
+                            return;
+                        }
+                        match this.explorer.commit() {
+                            Ok(report) => {
+                                this.documents.reconcile(&report);
+                                this.refresh_projection();
+                                this.request_close(target, discarded, window, cx);
+                            }
+                            Err(error) => this.message = format!("{error:#}"),
+                        }
+                    }
+                    Ok(0) => this.save_dialog(id, false, Some((target, discarded)), window, cx),
+                    Ok(1) => {
+                        let mut discarded = discarded;
+                        discarded.push((id, snapshot));
+                        this.request_close(target, discarded, window, cx);
+                    }
+                    _ => this.message = "Close cancelled".into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn set_pane(&mut self, pane: Pane, cx: &mut Context<Self>) {
         self.viewport_alignment = None;
         if pane == Pane::Explorer {
@@ -376,7 +608,22 @@ impl Workspace {
     }
     fn action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
         match action {
-            "save" => self.save(None, false)?,
+            "new" => self.change_document(
+                |documents| {
+                    documents.new_document();
+                    Ok(())
+                },
+                cx,
+            )?,
+            "open" => self.open_dialog(window, cx),
+            "save-as" => self.save_dialog(self.documents.active_id(), true, None, window, cx),
+            "save" => {
+                if self.pane == Pane::Explorer {
+                    self.save(None, false)?;
+                } else {
+                    self.save_dialog(self.documents.active_id(), false, None, window, cx);
+                }
+            }
             "explorer" => self.toggle_explorer(cx),
             "terminal" => self.toggle_terminal(cx)?,
             "editor" => self.set_pane(Pane::Editor, cx),
@@ -395,7 +642,7 @@ impl Workspace {
                 },
                 cx,
             )?,
-            "buffer-delete" => self.change_document(|documents| documents.delete(false), cx)?,
+            "buffer-delete" => self.close_tab(self.documents.active_id(), window, cx),
             "paste" => {
                 if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                     self.type_text(&text);
@@ -468,14 +715,10 @@ impl Workspace {
             "w" | "w!" => self.save((!arg.is_empty()).then(|| Path::new(arg)), verb == "w!")?,
             "wq" => {
                 self.save((!arg.is_empty()).then(|| Path::new(arg)), false)?;
-                if self.can_close(cx) {
-                    window.remove_window();
-                }
+                self.request_window_close(window, cx);
             }
             "q" => {
-                if self.can_close(cx) {
-                    window.remove_window();
-                }
+                self.request_window_close(window, cx);
             }
             "q!" => window.remove_window(),
             "bp" | "bprevious" | "previous-buffer" => self.change_document(
@@ -585,9 +828,7 @@ impl Workspace {
         // bind_config_keys); this handler only covers the hardcoded keys.
         let key = crate::keyboard::key(stroke);
         if stroke.modifiers.platform && stroke.key == "q" {
-            if self.can_close(cx) {
-                window.remove_window();
-            }
+            self.request_window_close(window, cx);
             return Ok(true);
         }
         if self.help {
@@ -997,11 +1238,15 @@ impl Workspace {
             .is_some_and(|(target, _)| target == pane)
     }
     fn close_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.request_close(Some(id), Vec::new(), window, cx);
+    }
+
+    fn delete_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.documents.active_id();
         let result = self.change_document(
             |documents| {
                 documents.select(id)?;
-                documents.delete(false)?;
+                documents.delete(true)?;
                 if id != active {
                     documents.select(active)?;
                 }
@@ -1282,6 +1527,9 @@ impl Render for Workspace {
         div().size_full().flex().flex_col().bg(background).text_color(foreground).font_family(self.config.font_family.clone()).text_size(px(self.config.font_size))
             .track_focus(&self.focus).on_key_down(cx.listener(Self::key_down))
             .on_action(cx.listener(|this, _: &Save, window, cx| this.run_action("save", window, cx)))
+            .on_action(cx.listener(|this, _: &NewDocument, window, cx| this.run_action("new", window, cx)))
+            .on_action(cx.listener(|this, _: &OpenDocument, window, cx| this.run_action("open", window, cx)))
+            .on_action(cx.listener(|this, _: &SaveAs, window, cx| this.run_action("save-as", window, cx)))
             .on_action(cx.listener(|this, _: &Paste, window, cx| this.run_action("paste", window, cx)))
             .on_action(cx.listener(|this, _: &ExplorerToggle, window, cx| this.run_action("explorer", window, cx)))
             .on_action(cx.listener(|this, _: &TerminalToggle, window, cx| this.run_action("terminal", window, cx)))
@@ -1375,7 +1623,7 @@ Clipboard: Ctrl-C/V in Editor and Files (Cmd-C/V on macOS).
 Ctrl-Shift-V pastes in every pane; terminal paste respects bracketed-paste mode.
 Images render at 60% of the pane width; ![alt](pic.png "40%") or "320px" resizes.
 :w [filename] save · :w! overwrite conflict · :e[!] [file] reload/open
-:q close window · :q! discard all and close · :wq save and close
+:q close with Save / Discard / Cancel · :q! discard all and close · :wq save and close
 
 Buffers: click a tab to select; click its × to close. Unsaved changes are protected.
 :bp / :bprevious / :previous-buffer · Ctrl-PageUp
@@ -1404,7 +1652,8 @@ markdown.divider: color, thickness (also used by heading underlines).
 Preview applies to .md filenames (case-insensitive) and untitled buffers only.
 Other filenames show literal text. In Markdown, inactive lines render;
 the cursor line exposes editable syntax. Save-as updates the preview type.
-Click a line to edit. Mouse wheel scrolls. Ctrl-S saves. Esc closes help."#;
+New: Ctrl/Cmd-N · Open: Ctrl/Cmd-O · Save: Ctrl/Cmd-S · Save As: Ctrl/Cmd-Shift-S
+Click a line to edit. Mouse wheel scrolls. Esc closes help."#;
 
 fn utf8_offset(text: &str, utf16: usize) -> usize {
     let mut units = 0;
