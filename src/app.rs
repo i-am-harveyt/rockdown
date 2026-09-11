@@ -113,12 +113,13 @@ impl Workspace {
         } else {
             Vec::new()
         };
+        let explorer_visible = document.path.is_none();
         Self {
             config,
             config_path,
             documents: crate::documents::Documents::new(document),
             explorer,
-            explorer_visible: true,
+            explorer_visible,
             explorer_resize: None,
             terminal: None,
             terminal_visible: false,
@@ -131,9 +132,12 @@ impl Workspace {
             row_heights: Default::default(),
             projection,
             command: None,
-            message:
-                "F1 help  ·  :w filename.md to save  ·  Ctrl-E toggle files  ·  Ctrl-` terminal"
-                    .into(),
+            message: if explorer_visible {
+                "i to write  ·  :w filename.md to save  ·  F1 help"
+            } else {
+                "i to write  ·  :w to save  ·  F1 help"
+            }
+            .into(),
             help: false,
             marked: None,
             search: String::new(),
@@ -952,79 +956,85 @@ impl Workspace {
             .overflow_x_scroll()
             .bg(panel)
             .text_xs()
-            .children(
-                self.documents
-                    .entries()
-                    .iter()
-                    .enumerate()
-                    .map(|(index, entry)| {
-                        let id = entry.id;
-                        let name = entry
-                            .document
-                            .path
-                            .as_ref()
-                            .and_then(|path| path.file_name())
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "Untitled".into());
-                        let label = format!(
-                            "{}: {}{}",
-                            index + 1,
-                            name,
-                            if entry.document.buffer.dirty() {
-                                " [+]"
-                            } else {
-                                ""
-                            }
-                        );
+            .children(self.documents.entries().iter().map(|entry| {
+                let id = entry.id;
+                let name = entry
+                    .document
+                    .path
+                    .as_ref()
+                    .and_then(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Untitled".into());
+                let label = format!(
+                    "{}{}",
+                    name,
+                    if entry.document.buffer.dirty() {
+                        " •"
+                    } else {
+                        ""
+                    }
+                );
+                let path = entry
+                    .document
+                    .path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "Untitled".into());
+                div()
+                    .id(("buffer-tab", id))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| ControlTooltip {
+                            label: path.clone().into(),
+                            background,
+                            foreground: muted,
+                            border: accent.opacity(0.3),
+                        })
+                        .into()
+                    })
+                    .h_full()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .flex_shrink_0()
+                    .cursor_pointer()
+                    .bg(if id == active { background } else { panel })
+                    .hover(|style| style.bg(accent.opacity(0.12)).text_color(accent))
+                    .active(|style| style.bg(accent.opacity(0.22)))
+                    .text_color(if id == active { accent } else { muted })
+                    .border_b_2()
+                    .border_color(if id == active { accent } else { panel })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Err(error) =
+                            this.change_document(|documents| documents.select(id), cx)
+                        {
+                            this.message = error.to_string();
+                        }
+                        this.focus.focus(window);
+                        cx.notify();
+                    }))
+                    .child(label)
+                    .child(
                         div()
-                            .id(("buffer-tab", id))
-                            .h_full()
-                            .px_3()
+                            .id(("close-buffer", id))
+                            .w(px(22.))
+                            .h(px(22.))
                             .flex()
                             .items_center()
-                            .gap_3()
-                            .flex_shrink_0()
+                            .justify_center()
+                            .rounded_md()
                             .cursor_pointer()
-                            .bg(if id == active { background } else { panel })
-                            .hover(|style| style.bg(accent.opacity(0.12)).text_color(accent))
-                            .active(|style| style.bg(accent.opacity(0.22)))
-                            .text_color(if id == active { accent } else { muted })
-                            .border_b_2()
-                            .border_color(if id == active { accent } else { panel })
+                            .text_size(px(17.))
+                            .text_color(muted)
+                            .hover(|style| style.bg(accent.opacity(0.18)).text_color(accent))
+                            .active(|style| style.bg(accent.opacity(0.3)))
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                if let Err(error) =
-                                    this.change_document(|documents| documents.select(id), cx)
-                                {
-                                    this.message = error.to_string();
-                                }
-                                this.focus.focus(window);
-                                cx.notify();
+                                cx.stop_propagation();
+                                this.close_tab(id, window, cx);
                             }))
-                            .child(label)
-                            .child(
-                                div()
-                                    .id(("close-buffer", id))
-                                    .w(px(22.))
-                                    .h(px(22.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .text_size(px(17.))
-                                    .text_color(muted)
-                                    .hover(|style| {
-                                        style.bg(accent.opacity(0.18)).text_color(accent)
-                                    })
-                                    .active(|style| style.bg(accent.opacity(0.3)))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        cx.stop_propagation();
-                                        this.close_tab(id, window, cx);
-                                    }))
-                                    .child("×"),
-                            )
-                    }),
-            )
+                            .child("×"),
+                    )
+            }))
     }
 
     fn dock_button(
@@ -1061,7 +1071,7 @@ impl Workspace {
             .active(|style| style.bg(accent.opacity(0.3)))
             .tooltip(move |_, cx| {
                 cx.new(|_| ControlTooltip {
-                    label,
+                    label: label.into(),
                     background,
                     foreground,
                     border: accent.opacity(0.3),
@@ -1151,22 +1161,6 @@ impl Render for Workspace {
         let foreground = self.color(&self.config.theme.foreground);
         let muted = self.color(&self.config.theme.muted);
         let accent = self.color(&self.config.theme.accent);
-        let path = self
-            .documents
-            .current()
-            .path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "Untitled — :w filename.md".into());
-        let title = format!(
-            "{}{}",
-            path,
-            if self.documents.current().buffer.dirty() {
-                "  [+]"
-            } else {
-                ""
-            }
-        );
         let mode = if self.pane == Pane::Terminal {
             "TERMINAL"
         } else {
@@ -1233,15 +1227,17 @@ impl Render for Workspace {
             .child(div().flex_1().min_h_0().flex()
                 .child(div().flex_1().min_w_0().flex().flex_col()
                     .child(self.buffer_bar(cx))
-                    .child(div().h(px(38.)).flex_shrink_0().px_4().flex().items_center().text_sm().text_color(muted).overflow_hidden().child(title))
-                    .child(div().flex_1().min_h_0().child(self.surface(Pane::Editor,cx))))
+                    .child(div().flex_1().min_h_0().flex().justify_center()
+                        .child(div().w_full().min_w_0().h_full()
+                            .when(self.documents.current().is_markdown(), |column| column.max_w(px(self.config.writing_width)).py_4())
+                            .child(self.surface(Pane::Editor,cx)))))
                 .when(self.explorer_visible, |body| body.child(div().w(px(explorer_width)).flex_shrink_0().flex().bg(panel)
                     .child(div().id("explorer-splitter").w(px(6.)).flex_shrink_0().h_full().cursor(CursorStyle::ResizeLeftRight)
                         .bg(if self.pane==Pane::Explorer {accent} else {background})
                         .hover(|style| style.bg(accent))
                         .on_mouse_down(MouseButton::Left, cx.listener(Self::start_explorer_resize)))
                     .child(div().flex_1().min_w_0().flex().flex_col()
-                        .child(div().h(px(38.)).flex_shrink_0().px_3().flex().items_center().text_xs().text_color(muted).child(if self.explorer.dirty() { "Files  [+]" } else { "Files" }))
+                        .child(div().h(px(38.)).flex_shrink_0().px_3().flex().items_center().text_xs().text_color(muted).child(if self.explorer.dirty() { "Files  •" } else { "Files" }))
                         .child(div().px_3().pb_2().text_xs().text_color(muted).overflow_hidden().child(self.explorer.directory.display().to_string()))
                         .child(div().flex_1().min_h_0().child(self.surface(Pane::Explorer,cx)))))))
             .when(self.terminal_visible, |root| root.child(div().h(px(self.config.terminal_height)).flex_shrink_0().flex().flex_col().border_t_1().border_color(accent).bg(background)
@@ -1255,17 +1251,17 @@ impl Render for Workspace {
                 .children(HELP.lines().map(|line| div().flex_shrink_0().text_sm().child(line.to_string())))
                 .child(div().flex_shrink_0().text_sm().child("Prose wraps. Local images render inline; remote images stay linked alt text (no network requests)."))))
             .child(div().h(px(34.)).flex_shrink_0().px_2().flex().items_center().gap_3().bg(panel).text_xs()
-                .child(self.dock_button(if self.terminal_visible { "Hide Terminal" } else { "Show Terminal" }, "terminal", self.terminal_visible, cx))
                 .child(div().flex_shrink_0().text_color(accent).font_weight(FontWeight::BOLD).child(mode))
                 .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().child(status))
                 .child(div().flex_shrink_0().text_color(muted).child(location))
+                .when(self.terminal_visible, |footer| footer.child(self.dock_button("Hide Terminal", "terminal", true, cx)))
                 .child(self.dock_button(explorer_label, "explorer", self.explorer_visible, cx))
                 .child(self.dock_button(if self.help { "Hide Help" } else { "Show Help" }, "help", self.help, cx)))
     }
 }
 
 struct ControlTooltip {
-    label: &'static str,
+    label: SharedString,
     background: Hsla,
     foreground: Hsla,
     border: Hsla,
@@ -1282,7 +1278,7 @@ impl Render for ControlTooltip {
             .bg(self.background)
             .text_color(self.foreground)
             .text_size(px(12.))
-            .child(self.label)
+            .child(self.label.clone())
     }
 }
 

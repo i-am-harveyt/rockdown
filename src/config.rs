@@ -12,6 +12,10 @@ pub struct Config {
     pub font_size: f32,
     pub line_height: f32,
     pub explorer_width: f32,
+    /// Maximum Markdown writing-column width, including its gutters.
+    pub writing_width: f32,
+    /// Show source line numbers in Markdown documents.
+    pub markdown_line_numbers: bool,
     pub terminal_height: f32,
     pub shell: String,
     pub theme: Theme,
@@ -110,6 +114,8 @@ impl Default for Config {
             font_size: 15.,
             line_height: 30.,
             explorer_width: 290.,
+            writing_width: 820.,
+            markdown_line_numbers: false,
             terminal_height: 240.,
             shell: std::env::var(if cfg!(windows) { "COMSPEC" } else { "SHELL" })
                 .ok()
@@ -173,6 +179,7 @@ impl Config {
             ("font_size", self.font_size, 10., 32.),
             ("line_height", self.line_height, self.font_size + 4., 64.),
             ("explorer_width", self.explorer_width, 180., 600.),
+            ("writing_width", self.writing_width, 320., 1600.),
             ("terminal_height", self.terminal_height, 100., 600.),
         ] {
             if !value.is_finite() || value < min || value > max {
@@ -381,6 +388,41 @@ thickness = 2.5
         assert!(config.markdown.divider.color.is_none());
         assert_eq!(config.markdown.divider.thickness, 2.5);
     }
+    #[test]
+    fn writing_layout_defaults_and_limits() {
+        let defaults = Config::parse(Path::new("c.toml"), "").unwrap();
+        assert_eq!(defaults.writing_width, 820.);
+        assert!(!defaults.markdown_line_numbers);
+        for width in [320., 820., 1600.] {
+            let config = Config::parse(
+                Path::new("c.toml"),
+                &format!("writing_width = {width}\nmarkdown_line_numbers = true"),
+            )
+            .unwrap();
+            config.validate().unwrap();
+            assert!(config.markdown_line_numbers);
+        }
+        for value in ["319.9", "1600.1", "nan", "inf"] {
+            let config =
+                Config::parse(Path::new("c.toml"), &format!("writing_width = {value}")).unwrap();
+            assert!(
+                config
+                    .validate()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("writing_width")
+            );
+        }
+        assert!(Config::parse(Path::new("c.toml"), "markdown_line_numbers = 'true'").is_err());
+        Config::parse(
+            Path::new("config.toml"),
+            include_str!("../examples/config.toml"),
+        )
+        .unwrap()
+        .validate()
+        .unwrap();
+    }
+
     #[test]
     fn invalid_configuration_is_not_silently_ignored() {
         assert!(Config::parse(Path::new("c.toml"), "font_sze = 18").is_err());

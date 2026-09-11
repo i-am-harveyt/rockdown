@@ -1,9 +1,10 @@
 # Rockdown
 
-A lightweight, native Markdown workspace built with **Rust and GPUI**. Rockdown combines in-place Markdown rendering, Vim-style editing, a buffer-editable file explorer, and an embedded terminal—without a browser or Electron runtime.
+A lightweight, native Markdown editor built with **Rust and GPUI**. Write in plain Markdown with in-place preview and Vim-style editing. A file drawer and terminal are available when needed, without a browser or Electron runtime.
 
 ## What it does
 
+- **Focused writing layout:** a centered Markdown column, optional line numbers, and compact document tabs with full paths on hover. Opening a named file starts with Files hidden; opening a directory keeps Files visible.
 - **Live-preview Markdown:** headings, emphasis, code, lists, task lists, tables, quotes, wrapped prose, and local images.
 - **Vim-style editing:** Normal, Insert, and Visual modes; motions, counts, operators, search, and undo/redo.
 - **Multiple buffers:** switch between documents without losing unsaved text, cursor position, viewport, or undo history.
@@ -12,6 +13,8 @@ A lightweight, native Markdown workspace built with **Rust and GPUI**. Rockdown 
 - **TOML configuration:** customize fonts, colors, dock dimensions, shell, and shortcuts.
 
 Rockdown uses **line-based live preview** for `.md` files (case-insensitive) and untitled buffers: inactive lines render as Markdown, while the active line exposes its source syntax for editing. All other named files—including TOML, code, and extensionless files—show literal plain text, without Markdown styling, tables, or image previews. Preview mode follows save-as and explorer renames. Files remain plain UTF-8 text on disk.
+
+Markdown uses a maximum column width of 820 logical pixels, shrinking to fit smaller windows. Set `writing_width` (320–1600) and `markdown_line_numbers = true` in your TOML configuration to adjust the layout. Plain-text documents retain full-width editing and line numbers. A dot beside a tab name indicates unsaved changes. Toggle Files with Ctrl-E (Cmd-E on macOS) and the terminal with Ctrl-`; F1 opens the keyboard guide.
 
 ## Build and run
 

@@ -421,7 +421,15 @@ impl Element for Surface {
                 &app.explorer.buffer
             };
             let top = app.tops[self.pane.index()];
-            let gutter = if self.pane == Pane::Editor { 56. } else { 16. };
+            let show_line_numbers = self.pane == Pane::Editor
+                && (!app.documents.current().is_markdown() || app.config.markdown_line_numbers);
+            let gutter = if show_line_numbers {
+                56.
+            } else if self.pane == Pane::Editor {
+                24.
+            } else {
+                16.
+            };
             let available = (bounds.size.width - px(gutter + 24.)).max(px(1.));
             let style = SpanStyle {
                 font: font.clone(),
@@ -618,7 +626,7 @@ impl Element for Surface {
                         color,
                     ));
                 }
-                if self.pane == Pane::Editor {
+                if show_line_numbers {
                     let number = format!("{:>4}", source_row + 1);
                     let shaped = window.text_system().shape_line(
                         number.clone().into(),
@@ -900,7 +908,7 @@ impl Surface {
                 align,
             });
         }
-        if self.pane == Pane::Editor {
+        if self.pane == Pane::Editor && app.config.markdown_line_numbers {
             let number = format!("{:>4}", source_row + 1);
             let shaped = window.text_system().shape_line(
                 number.clone().into(),
