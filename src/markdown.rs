@@ -136,6 +136,8 @@ pub struct RenderedLine {
     pub spans: Vec<Span>,
     pub images: Vec<PreviewImage>,
     pub table: Option<TableRow>,
+    /// Byte offset of the task checkbox in the physical source line.
+    pub task_marker: Option<usize>,
 }
 
 #[derive(Default)]
@@ -209,6 +211,7 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
             spans: Vec::new(),
             images: Vec::new(),
             table: None,
+            task_marker: None,
         })
         .collect();
     // Difference arrays classify nested containers in one final linear pass,
@@ -361,6 +364,7 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
             }
             Event::Rule => lines[row].kind = BlockKind::Rule,
             Event::TaskListMarker(checked) => {
+                lines[row].task_marker = Some(range.start - starts[row]);
                 style.append(&mut lines[row], if checked { "[x] " } else { "[ ] " });
             }
             // Breaks already have distinct physical rows. Adding a space here
@@ -554,6 +558,16 @@ mod tests {
             .iter()
             .map(|cell| cell.iter().map(|span| span.text.as_str()).collect())
             .collect()
+    }
+
+    #[test]
+    fn task_offsets_come_from_parser_and_ignore_code() {
+        let text = "- [ ] 世界\n> - [X] done\n\n```md\n- [ ] code\n```\n\nplain [ ] text";
+        let projected = project(text);
+        assert_eq!(projected[0].task_marker, Some(2));
+        assert_eq!(projected[1].task_marker, Some(4));
+        assert_eq!(projected[4].task_marker, None);
+        assert_eq!(projected[7].task_marker, None);
     }
 
     #[test]

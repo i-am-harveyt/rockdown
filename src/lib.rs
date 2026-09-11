@@ -5,6 +5,7 @@ pub mod documents;
 pub mod explorer;
 pub mod keyboard;
 pub mod markdown;
+mod markdown_edit;
 pub mod surface;
 pub mod terminal;
 pub mod vim;

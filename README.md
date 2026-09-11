@@ -148,6 +148,12 @@ The editor and file explorer share the **system clipboard** for Vim operations: 
 
 **Return behavior:** in Insert mode, Return splits the line at the caret and moves the cursor to the new line. In Normal mode, it opens a line below and enters Insert mode. In the command line, Return executes the command.
 
+### Markdown typing helpers
+
+In Insert mode, Return continues a Markdown list or quote using the current indentation and marker. Numbered lists increment the current number; a new task starts unchecked. Return on an empty item removes its marker, and an empty quote exits one quote level. **Shift-Return** always inserts a literal newline. Plain-text files, code blocks, Normal/Visual Return behavior, and pasted text remain literal.
+
+Click a task's `[ ]` or `[x]` marker to toggle it in source or preview. The change is undoable and preserves the caret and editing mode. Modified clicks retain ordinary editor behavior. Task-like text inside code blocks is not interactive.
+
 ### Whole-buffer substitution
 
 From Normal mode, use `:%s/pattern/replacement/flags` in the editor or file explorer:

@@ -680,13 +680,25 @@ impl Workspace {
             && !stroke.modifiers.platform
             && !stroke.modifiers.alt
         {
+            let continue_markdown = self.documents.current().is_markdown()
+                && self.projection.get(self.buffer().row).is_some_and(|line| {
+                    matches!(
+                        line.kind,
+                        markdown::BlockKind::List | markdown::BlockKind::Quote
+                    )
+                })
+                && !stroke.modifiers.shift;
             let buffer = self.buffer_mut();
             match buffer.mode {
                 Mode::Normal => {
                     buffer.key("o");
                 }
                 Mode::Insert => {
-                    buffer.key("enter");
+                    if continue_markdown {
+                        buffer.markdown_enter();
+                    } else {
+                        buffer.key("enter");
+                    }
                 }
                 Mode::Visual => {
                     buffer.key("c");
@@ -809,6 +821,41 @@ impl Workspace {
         let hit = self.layouts[pane.index()].rows.iter().find(|row| {
             event.position.y >= row.origin.y && event.position.y < row.origin.y + row.height
         });
+        let task = hit.and_then(|row| {
+            if pane != Pane::Editor
+                || !self.documents.current().is_markdown()
+                || event.click_count != 1
+                || event.modifiers.shift
+                || event.modifiers.control
+                || event.modifiers.alt
+                || event.modifiers.platform
+                || event.position.y >= row.origin.y + px(self.config.line_height)
+            {
+                return None;
+            }
+            let marker = self.projection.get(row.source_row)?.task_marker?;
+            let display = if row.raw {
+                marker
+            } else {
+                row.line
+                    .text
+                    .find("[ ]")
+                    .or_else(|| row.line.text.find("[x]"))?
+            };
+            let x = event.position.x - row.origin.x;
+            (x >= row.line.x_for_index(display) && x < row.line.x_for_index(display + 3))
+                .then_some((row.source_row, marker))
+        });
+        if let Some((row, marker)) = task {
+            self.set_pane(pane, cx);
+            self.focus.focus(window);
+            if self.buffer_mut().toggle_markdown_task(row, marker) {
+                self.marked = None;
+                self.refresh_projection();
+            }
+            cx.notify();
+            return;
+        }
         let location = hit.map(|row| {
             (
                 row.source_row,

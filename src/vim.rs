@@ -494,6 +494,59 @@ impl Buffer {
         }
     }
 
+    /// Continue a Markdown container in the current Insert undo transaction.
+    /// The caller checks the parsed context so code and plain text stay literal.
+    pub fn markdown_enter(&mut self) {
+        use crate::markdown_edit::{EnterEdit, enter_edit};
+        self.clamp();
+        if self.mode != Mode::Insert {
+            return;
+        }
+        match enter_edit(&self.lines[self.row].text, self.col) {
+            Some(EnterEdit::Continue(text)) => self.insert_text(&text),
+            Some(EnterEdit::Exit { from, to }) => {
+                self.ensure_insert_start();
+                self.delete_range(
+                    Position {
+                        row: self.row,
+                        col: from,
+                    },
+                    Position {
+                        row: self.row,
+                        col: to,
+                    },
+                );
+                self.col = from;
+            }
+            None => self.insert_text("\n"),
+        }
+    }
+
+    /// Toggle a parser-identified task marker as a standalone undoable edit,
+    /// retaining the current caret, selection, clipboard and editing mode.
+    pub fn toggle_markdown_task(&mut self, row: usize, marker: usize) -> bool {
+        let Some(text) = self.lines.get(row).map(|line| &line.text) else {
+            return false;
+        };
+        let Some(end) = marker.checked_add(3) else {
+            return false;
+        };
+        let Some(task) = text.get(marker..end) else {
+            return false;
+        };
+        let replacement = match task {
+            "[ ]" => "[x]",
+            "[x]" | "[X]" => "[ ]",
+            _ => return false,
+        };
+        self.finish_insert();
+        let before = self.snapshot();
+        self.lines[row].text.replace_range(marker..end, replacement);
+        self.bump_revision();
+        self.record(before);
+        true
+    }
+
     pub fn key(&mut self, key: &str) -> bool {
         self.clamp();
         if key == "escape" {
@@ -1370,6 +1423,47 @@ mod tests {
         for key in keys {
             assert!(buffer.key(key), "unconsumed key: {key}");
         }
+    }
+
+    #[test]
+    fn markdown_enter_preserves_tail_and_undo() {
+        let mut buffer = Buffer::new("- hello 世界");
+        buffer.key("i");
+        buffer.col = 8;
+        buffer.markdown_enter();
+        assert_eq!(buffer.text(), "- hello \n- 世界");
+        assert_eq!(buffer.col, 2);
+        buffer.key("escape");
+        buffer.undo();
+        assert_eq!(buffer.text(), "- hello 世界");
+        buffer.redo();
+        assert_eq!(buffer.text(), "- hello \n- 世界");
+    }
+
+    #[test]
+    fn empty_task_exit_and_checkbox_toggles_are_undoable() {
+        let mut buffer = Buffer::new("> - [ ] ");
+        buffer.key("A");
+        buffer.markdown_enter();
+        assert_eq!(buffer.text(), "> ");
+        buffer.key("escape");
+        buffer.undo();
+        assert_eq!(buffer.text(), "> - [ ] ");
+        buffer.key("i");
+        assert!(buffer.toggle_markdown_task(0, 4));
+        assert_eq!(buffer.text(), "> - [x] ");
+        assert_eq!(buffer.mode, Mode::Insert);
+        assert!(buffer.take_yank().is_none());
+        buffer.insert_text("typed");
+        buffer.key("escape");
+        buffer.undo();
+        assert_eq!(buffer.text(), "> - [x] ");
+        buffer.undo();
+        assert_eq!(buffer.text(), "> - [ ] ");
+        buffer.redo();
+        assert_eq!(buffer.text(), "> - [x] ");
+        assert!(!buffer.toggle_markdown_task(0, usize::MAX));
+        assert!(!buffer.toggle_markdown_task(1, 0));
     }
 
     #[test]
