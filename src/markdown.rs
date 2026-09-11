@@ -132,10 +132,24 @@ fn parse_image_width(title: &str) -> Option<ImageWidth> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderedLine {
     pub source_row: usize,
+    /// Rendered UTF-8 boundaries paired with byte columns in the physical source row.
+    pub source_offsets: Vec<(usize, usize)>,
     pub kind: BlockKind,
     pub spans: Vec<Span>,
     pub images: Vec<PreviewImage>,
     pub table: Option<TableRow>,
+    /// Byte offset of the task checkbox in the physical source line.
+    pub task_marker: Option<usize>,
+}
+
+impl RenderedLine {
+    pub fn source_column(&self, display_column: usize) -> usize {
+        self.source_offsets
+            .iter()
+            .rev()
+            .find(|(display, _)| *display <= display_column)
+            .map_or(0, |(_, source)| *source)
+    }
 }
 
 #[derive(Default)]
@@ -205,10 +219,12 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
     let mut lines: Vec<_> = (0..starts.len())
         .map(|source_row| RenderedLine {
             source_row,
+            source_offsets: Vec::new(),
             kind: BlockKind::Paragraph,
             spans: Vec::new(),
             images: Vec::new(),
             table: None,
+            task_marker: None,
         })
         .collect();
     // Difference arrays classify nested containers in one final linear pass,
@@ -227,6 +243,31 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
 
     for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
         let row = source_row(&starts, range.start);
+        let mapped_rows = match &event {
+            Event::Text(_)
+            | Event::Html(_)
+            | Event::InlineHtml(_)
+            | Event::Code(_)
+            | Event::InlineMath(_)
+            | Event::DisplayMath(_) => covered_rows(&starts, &range),
+            Event::Start(Tag::Item) | Event::TaskListMarker(_) | Event::FootnoteReference(_) => {
+                row..row + 1
+            }
+            _ => row..row,
+        };
+        // Appends may extend the last style span or create new spans. Capture only
+        // that boundary; never rescan or copy the already-rendered paragraph.
+        let previous: Vec<_> = mapped_rows
+            .clone()
+            .map(|row| {
+                let line = &lines[row];
+                (
+                    line.spans.len(),
+                    line.spans.last().map_or(0, |span| span.text.len()),
+                )
+            })
+            .collect();
+        let source_range = range.clone();
         match event {
             Event::Start(tag) => match tag {
                 Tag::Heading { level, .. } => {
@@ -361,6 +402,7 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
             }
             Event::Rule => lines[row].kind = BlockKind::Rule,
             Event::TaskListMarker(checked) => {
+                lines[row].task_marker = Some(range.start - starts[row]);
                 style.append(&mut lines[row], if checked { "[x] " } else { "[ ] " });
             }
             // Breaks already have distinct physical rows. Adding a space here
@@ -372,6 +414,48 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
             Event::FootnoteReference(label) => {
                 append_text(&mut lines, row, &label, &style, cell);
             }
+        }
+        for (row, (span_count, last_len)) in mapped_rows.zip(previous) {
+            let line = &lines[row];
+            if line.spans.len() == span_count
+                && line.spans.last().map_or(0, |span| span.text.len()) == last_len
+            {
+                continue;
+            }
+            let previous = line
+                .source_offsets
+                .last()
+                .map_or(0, |(display, _)| *display);
+            let mut added = String::new();
+            if span_count > 0 {
+                added.push_str(&line.spans[span_count - 1].text[last_len..]);
+            }
+            for span in &line.spans[span_count..] {
+                added.push_str(&span.text);
+            }
+            let row_start = starts[row];
+            let row_end = starts.get(row + 1).map_or(source.len(), |start| start - 1);
+            let start = source_range.start.max(row_start).min(row_end);
+            let end = source_range.end.min(row_end).max(start);
+            let literal = source[start..end].find(&added);
+            let offsets = &mut lines[row].source_offsets;
+            // The next visible run owns shared boundaries, skipping hidden delimiters.
+            if offsets
+                .last()
+                .is_some_and(|(display, _)| *display == previous)
+            {
+                offsets.pop();
+            }
+            for (byte, _) in added.char_indices() {
+                offsets.push((
+                    previous + byte,
+                    literal.map_or(start, |offset| start + offset + byte) - row_start,
+                ));
+            }
+            offsets.push((
+                previous + added.len(),
+                literal.map_or(end, |offset| start + offset + added.len()) - row_start,
+            ));
         }
     }
 
@@ -554,6 +638,16 @@ mod tests {
             .iter()
             .map(|cell| cell.iter().map(|span| span.text.as_str()).collect())
             .collect()
+    }
+
+    #[test]
+    fn task_offsets_come_from_parser_and_ignore_code() {
+        let text = "- [ ] 世界\n> - [X] done\n\n```md\n- [ ] code\n```\n\nplain [ ] text";
+        let projected = project(text);
+        assert_eq!(projected[0].task_marker, Some(2));
+        assert_eq!(projected[1].task_marker, Some(4));
+        assert_eq!(projected[4].task_marker, None);
+        assert_eq!(projected[7].task_marker, None);
     }
 
     #[test]
@@ -781,5 +875,49 @@ mod tests {
         assert_eq!((separator.start, separator.end), (0, 2));
         assert!(separator.separator);
         assert!(separator.cells.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod mapping_tests {
+    use super::*;
+
+    #[test]
+    fn preview_offsets_skip_markup_and_keep_unicode_and_entities() {
+        let source = "# **café** and [世界](target) &amp; `code`";
+        let lines = project(source);
+        let rendered: String = lines[0]
+            .spans
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect();
+        for word in ["café", "and", "世界", "code"] {
+            assert_eq!(
+                lines[0].source_column(rendered.find(word).unwrap()),
+                source.find(word).unwrap(),
+                "{word}"
+            );
+        }
+        assert_eq!(
+            lines[0].source_column(rendered.find('&').unwrap()),
+            source.find("&amp;").unwrap()
+        );
+    }
+
+    #[test]
+    fn list_marker_and_multiline_text_map_to_physical_source_rows() {
+        let source = "- **first**\n  second café\n\n> [link](url)";
+        let lines = project(source);
+        for (row, word) in [(0, "first"), (1, "café"), (3, "link")] {
+            let rendered: String = lines[row]
+                .spans
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect();
+            assert_eq!(
+                lines[row].source_column(rendered.find(word).unwrap()),
+                source.lines().nth(row).unwrap().find(word).unwrap()
+            );
+        }
     }
 }

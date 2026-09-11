@@ -1,9 +1,10 @@
 # Rockdown
 
-A lightweight, native Markdown workspace built with **Rust and GPUI**. Rockdown combines in-place Markdown rendering, Vim-style editing, a buffer-editable file explorer, and an embedded terminal—without a browser or Electron runtime.
+A lightweight, native Markdown editor built with **Rust and GPUI**. Write in plain Markdown with in-place preview and Vim-style editing. A file drawer and terminal are available when needed, without a browser or Electron runtime.
 
 ## What it does
 
+- **Focused writing layout:** a centered Markdown column, optional line numbers, and compact document tabs with full paths on hover. Opening a named file starts with Files hidden; opening a directory keeps Files visible.
 - **Live-preview Markdown:** headings, emphasis, code, lists, task lists, tables, quotes, wrapped prose, and local images.
 - **Vim-style editing:** Normal, Insert, and Visual modes; motions, counts, operators, search, and undo/redo.
 - **Multiple buffers:** switch between documents without losing unsaved text, cursor position, viewport, or undo history.
@@ -12,6 +13,8 @@ A lightweight, native Markdown workspace built with **Rust and GPUI**. Rockdown 
 - **TOML configuration:** customize fonts, colors, dock dimensions, shell, and shortcuts.
 
 Rockdown uses **line-based live preview** for `.md` files (case-insensitive) and untitled buffers: inactive lines render as Markdown, while the active line exposes its source syntax for editing. All other named files—including TOML, code, and extensionless files—show literal plain text, without Markdown styling, tables, or image previews. Preview mode follows save-as and explorer renames. Files remain plain UTF-8 text on disk.
+
+Markdown uses a maximum column width of 820 logical pixels, shrinking to fit smaller windows. Set `writing_width` (320–1600) and `markdown_line_numbers = true` in your TOML configuration to adjust the layout. Plain-text documents retain full-width editing and line numbers. A dot beside a tab name indicates unsaved changes. Toggle Files with Ctrl-E (Cmd-E on macOS) and the terminal with Ctrl-`; F1 opens the keyboard guide.
 
 ## Build and run
 
@@ -92,10 +95,9 @@ rockdown [FILE|DIRECTORY] [--config PATH] [--check-config]
 1. Launch Rockdown in your notes directory.
 2. The editor starts in **Normal mode**. Press `i` to enter **Insert mode** and start typing.
 3. Press Return to insert a newline. Press `Esc` to return to Normal mode.
-4. Type `:w note.md` and press Return to save your note.
+4. Press `Cmd-S` / `Ctrl-S` and choose a filename to save your note.
 5. Press `Ctrl-W`, then `l`, to focus the file explorer. Select a file with `j` or `k` and press Return to open it.
 6. Use the buffer tabs or `Ctrl-PageUp` / `Ctrl-PageDown` to switch documents.
-7. Press Ctrl + backtick to open the terminal dock.
 
 Press **F1** or enter `:help` for the in-app keyboard guide. Press `Esc` to dismiss it.
 
@@ -114,10 +116,10 @@ Press **F1** or enter `:help` for the in-app keyboard guide. Press `Esc` to dism
 | `Ctrl-Shift-V` | Paste from the clipboard in any pane. |
 | Ctrl + backtick | Toggle the terminal dock. |
 | `Ctrl-PageUp` / `Ctrl-PageDown` | Previous / next editor buffer. |
-| `Cmd-W` / `Ctrl-Shift-W` | Close the current editor buffer, refusing unsaved changes. |
+| `Cmd-W` / `Ctrl-Shift-W` | Close the current editor buffer, prompting to Save / Discard / Cancel if needed. |
 | `F1` | Toggle the keyboard guide. |
 
-You can also click a pane to focus it. The **terminal icon** is at the bottom-left; the **folder** and **circled question-mark** icons at the bottom-right toggle Files and Help. Hover for a tooltip identifying the action; icons stay highlighted while their dock or guide is open. Footer buttons, buffer tabs, and tab-close controls have distinct hover and pressed highlights. The macOS title bar centers **Rockdown — {buffer name}** and updates when you switch or save a buffer under a new name.
+Click a pane to focus it. In Markdown, clicks place the caret near the clicked text and preserve Insert mode; dragging or double-clicking a word creates a Vim Visual selection. Active prose stays wrapped, and Insert-mode Up/Down move between visual rows. The **terminal icon** is at the bottom-left; the **folder** and **circled question-mark** icons at the bottom-right toggle Files and Help. Hover for a tooltip identifying the action; icons stay highlighted while their dock or guide is open. Footer buttons, buffer tabs, and tab-close controls have distinct hover and pressed highlights. The macOS title bar centers **Rockdown — {buffer name}** and updates when you switch or save a buffer under a new name.
 
 ## Markdown editing
 
@@ -146,7 +148,13 @@ Counts work with supported motions and operators, such as `3j` or `2dd`. In Visu
 
 The editor and file explorer share the **system clipboard** for Vim operations: `y`/`yy` copy text, and `p`/`P` paste the current clipboard after/before the cursor. This also works across buffers and after explorer navigation or refresh. Linewise yanks paste as whole lines; characterwise yanks stay inline. Text copied from another application replaces the previous yank. As with Vim's unnamed register, delete/change operations also copy the removed text. Explorer yanks copy the displayed filename, not the file's contents.
 
-**Return behavior:** in Insert mode, Return splits the line at the caret and moves the cursor to the new line. In Normal mode, it opens a line below and enters Insert mode. In the command line, Return executes the command.
+**Return behavior:** in Insert mode, Return splits the line at the caret, continuing Markdown lists and quotes as described below. In Normal mode, it opens a line below and enters Insert mode. In the command line, Return executes the command.
+
+### Markdown typing helpers
+
+In Insert mode, Return continues a Markdown list or quote using the current indentation and marker. Numbered lists increment the current number; a new task starts unchecked. Return on an empty item removes its marker, and an empty quote exits one quote level. **Shift-Return** always inserts a literal newline. Plain-text files, code blocks, Normal/Visual Return behavior, and pasted text remain literal.
+
+Click a task's `[ ]` or `[x]` marker to toggle it in source or preview. The change is undoable and preserves the caret and editing mode. Modified clicks retain ordinary editor behavior. Task-like text inside code blocks is not interactive.
 
 ### Whole-buffer substitution
 
@@ -165,6 +173,28 @@ The comments above explain the examples; do not include them in the command. Pat
 One `u` undoes the entire substitution; `Ctrl-R` redoes it. Invalid patterns, unsupported flags (including interactive `c` confirmation), and missing matches report an error without changing the buffer. An empty pattern is rejected rather than reusing a previous search. In the explorer, replacements stage filename edits; `:w` commits them with the usual safety checks.
 
 ### Saving, opening, and quitting
+
+### Document dialogs
+
+Use **Ctrl/Cmd-N** for a new document, **Ctrl/Cmd-O** to open a file,
+**Ctrl/Cmd-S** to save, and **Ctrl/Cmd-Shift-S** for Save As. Untitled documents
+open a native save dialog. These actions also appear in the native File menu
+where the platform supports menus. Configure them using the `new`, `open`,
+`save`, and `save-as` key actions. A dot beside a document name indicates unsaved
+changes; the footer confirms saves and reports cancellation or conflicts.
+
+Closing a tab offers Save / Discard / Cancel. Window close (including `:q`)
+checks every dirty document, then explicitly asks about staged Files operations.
+Cancelling any prompt keeps the window and its documents open. Earlier successful
+saves remain saved; discarded buffers are retained until the entire close flow
+is accepted. Saving staged Files changes applies renames, creations, and moves
+to trash, just as `:w` in Files does.
+
+Colon commands remain available. In Files, Ctrl/Cmd-S still applies staged
+operations; Save As always targets the active document. Save As preserves file
+conflict and buffer-ownership checks: choosing an existing unrelated file reports
+a conflict rather than replacing it. Explicit `:w! path` is available for
+intentional overwrites. `:q!` continues to explicitly discard everything.
 
 Enter these commands from Normal mode. Focus the editor first with `Ctrl-W h`; `:w` and `:e` have different meanings in the explorer.
 
@@ -190,7 +220,7 @@ Existing LF or CRLF line endings and UTF-8 BOMs are preserved when saving. Editi
 
 An **editor buffer** is an open document, not a file explorer entry. Closing a buffer never deletes its file from disk.
 
-Click a tab to select a document, or its **×** to close it. Closing an inactive tab leaves the selected document active. A `[+]` marker indicates unsaved changes; the close control refuses to discard them.
+Click a tab to select a document, or its **×** to close it. Closing an inactive tab leaves the selected document active. A dot indicates unsaved changes; closing a dirty document offers Save / Discard / Cancel.
 
 | Action | Commands |
 | --- | --- |

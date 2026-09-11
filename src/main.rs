@@ -18,7 +18,7 @@ fn run() -> Result<()> {
         match arg.to_str() {
             Some("--help" | "-h") => {
                 println!(
-                    "Rockdown - native Vim-first Markdown workspace\n\nUsage: rockdown [FILE|DIRECTORY] [--config PATH] [--check-config]\n\n--config PATH    Load TOML settings from an explicit file\n--check-config   Validate settings without opening a window\n\nDefault settings: $XDG_CONFIG_HOME/rockdown/config.toml\n(falls back to %APPDATA%\\rockdown\\config.toml on Windows,\nor ~/.config/rockdown/config.toml on Unix).\n\nIn the app: F1 help, Ctrl-E toggle files, Ctrl-` terminal, Ctrl-S save.\nEditor: i insert, Return new line, Esc normal, hjkl motion, :w [file].\nClipboard: Ctrl-C/V in Editor and Files (Cmd-C/V on macOS); Ctrl-Shift-V in all panes.\nBuffers: :bp previous, :bn next, :bd close, :bd! discard and close.\nCtrl-PageUp/PageDown cycle; Cmd-W or Ctrl-Shift-W closes the current buffer.\nExplorer: drag its left edge to resize; edit names, o create, dd trash, :w apply.\n:q closes the window only when every buffer is saved; :q! discards all.\nSee examples/config.toml for settings."
+                    "Rockdown - native Vim-first Markdown workspace\n\nUsage: rockdown [FILE|DIRECTORY] [--config PATH] [--check-config]\n\n--config PATH    Load TOML settings from an explicit file\n--check-config   Validate settings without opening a window\n\nDefault settings: $XDG_CONFIG_HOME/rockdown/config.toml\n(falls back to %APPDATA%\\rockdown\\config.toml on Windows,\nor ~/.config/rockdown/config.toml on Unix).\n\nIn the app: F1 help, Ctrl-E toggle files, Ctrl-` terminal, Ctrl-S save.\nEditor: i insert, Return new line, Esc normal, hjkl motion, :w [file].\nClipboard: Ctrl-C/V in Editor and Files (Cmd-C/V on macOS); Ctrl-Shift-V in all panes.\nBuffers: :bp previous, :bn next, :bd close, :bd! discard and close.\nCtrl-PageUp/PageDown cycle; Cmd-W or Ctrl-Shift-W closes the current buffer.\nExplorer: drag its left edge to resize; edit names, o create, dd trash, :w apply.\n:q closes with Save/Discard/Cancel prompts; :q! discards all.\nSee examples/config.toml for settings."
                 );
                 return Ok(());
             }
@@ -96,8 +96,9 @@ fn run() -> Result<()> {
                     )
                 });
                 let weak = workspace.downgrade();
-                window.on_window_should_close(cx, move |_, cx| {
-                    weak.update(cx, |app, cx| app.can_close(cx)).unwrap_or(true)
+                window.on_window_should_close(cx, move |window, cx| {
+                    weak.update(cx, |app, cx| app.request_window_close(window, cx))
+                        .unwrap_or(true)
                 });
                 workspace
             },
@@ -106,6 +107,18 @@ fn run() -> Result<()> {
             eprintln!("Opening window: {error:#}");
             cx.quit();
         }
+        cx.set_menus(vec![Menu {
+            name: "File".into(),
+            items: vec![
+                MenuItem::action("New", rockdown::app::NewDocument),
+                MenuItem::action("Open…", rockdown::app::OpenDocument),
+                MenuItem::separator(),
+                MenuItem::action("Save", rockdown::app::Save),
+                MenuItem::action("Save As…", rockdown::app::SaveAs),
+                MenuItem::separator(),
+                MenuItem::action("Close Document", rockdown::app::BufferDelete),
+            ],
+        }]);
         cx.activate(true);
     });
     Ok(())

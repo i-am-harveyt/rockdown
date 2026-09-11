@@ -445,6 +445,35 @@ impl Buffer {
         self.clamp();
     }
 
+    /// Mouse selection uses the existing inclusive Visual selection and register behavior.
+    pub fn select_with_mouse(&mut self, anchor: (usize, usize), head: (usize, usize)) {
+        if self.mode == Mode::Insert {
+            self.key("escape");
+        }
+        self.visual_anchor = Some(Position {
+            row: anchor.0,
+            col: anchor.1,
+        });
+        self.row = head.0;
+        self.col = head.1;
+        self.mode = Mode::Visual;
+        self.pending = None;
+        self.count = None;
+        self.preferred_column = None;
+        self.clamp();
+    }
+
+    pub fn select_word_with_mouse(&mut self) {
+        let text = &self.lines[self.row].text;
+        let range = text
+            .split_word_bound_indices()
+            .find(|(start, part)| *start <= self.col && self.col < *start + part.len())
+            .map(|(start, part)| (start, previous_boundary(text, start + part.len())));
+        if let Some((start, end)) = range {
+            self.select_with_mouse((self.row, start), (self.row, end));
+        }
+    }
+
     pub fn selected_range(&self, row: usize) -> Option<Range<usize>> {
         if self.mode != Mode::Visual || row >= self.lines.len() {
             return None;
@@ -492,6 +521,59 @@ impl Buffer {
             self.record(before);
             self.clamp();
         }
+    }
+
+    /// Continue a Markdown container in the current Insert undo transaction.
+    /// The caller checks the parsed context so code and plain text stay literal.
+    pub fn markdown_enter(&mut self) {
+        use crate::markdown_edit::{EnterEdit, enter_edit};
+        self.clamp();
+        if self.mode != Mode::Insert {
+            return;
+        }
+        match enter_edit(&self.lines[self.row].text, self.col) {
+            Some(EnterEdit::Continue(text)) => self.insert_text(&text),
+            Some(EnterEdit::Exit { from, to }) => {
+                self.ensure_insert_start();
+                self.delete_range(
+                    Position {
+                        row: self.row,
+                        col: from,
+                    },
+                    Position {
+                        row: self.row,
+                        col: to,
+                    },
+                );
+                self.col = from;
+            }
+            None => self.insert_text("\n"),
+        }
+    }
+
+    /// Toggle a parser-identified task marker as a standalone undoable edit,
+    /// retaining the current caret, selection, clipboard and editing mode.
+    pub fn toggle_markdown_task(&mut self, row: usize, marker: usize) -> bool {
+        let Some(text) = self.lines.get(row).map(|line| &line.text) else {
+            return false;
+        };
+        let Some(end) = marker.checked_add(3) else {
+            return false;
+        };
+        let Some(task) = text.get(marker..end) else {
+            return false;
+        };
+        let replacement = match task {
+            "[ ]" => "[x]",
+            "[x]" | "[X]" => "[ ]",
+            _ => return false,
+        };
+        self.finish_insert();
+        let before = self.snapshot();
+        self.lines[row].text.replace_range(marker..end, replacement);
+        self.bump_revision();
+        self.record(before);
+        true
     }
 
     pub fn key(&mut self, key: &str) -> bool {
@@ -1373,6 +1455,47 @@ mod tests {
     }
 
     #[test]
+    fn markdown_enter_preserves_tail_and_undo() {
+        let mut buffer = Buffer::new("- hello 世界");
+        buffer.key("i");
+        buffer.col = 8;
+        buffer.markdown_enter();
+        assert_eq!(buffer.text(), "- hello \n- 世界");
+        assert_eq!(buffer.col, 2);
+        buffer.key("escape");
+        buffer.undo();
+        assert_eq!(buffer.text(), "- hello 世界");
+        buffer.redo();
+        assert_eq!(buffer.text(), "- hello \n- 世界");
+    }
+
+    #[test]
+    fn empty_task_exit_and_checkbox_toggles_are_undoable() {
+        let mut buffer = Buffer::new("> - [ ] ");
+        buffer.key("A");
+        buffer.markdown_enter();
+        assert_eq!(buffer.text(), "> ");
+        buffer.key("escape");
+        buffer.undo();
+        assert_eq!(buffer.text(), "> - [ ] ");
+        buffer.key("i");
+        assert!(buffer.toggle_markdown_task(0, 4));
+        assert_eq!(buffer.text(), "> - [x] ");
+        assert_eq!(buffer.mode, Mode::Insert);
+        assert!(buffer.take_yank().is_none());
+        buffer.insert_text("typed");
+        buffer.key("escape");
+        buffer.undo();
+        assert_eq!(buffer.text(), "> - [x] ");
+        buffer.undo();
+        assert_eq!(buffer.text(), "> - [ ] ");
+        buffer.redo();
+        assert_eq!(buffer.text(), "> - [x] ");
+        assert!(!buffer.toggle_markdown_task(0, usize::MAX));
+        assert!(!buffer.toggle_markdown_task(1, 0));
+    }
+
+    #[test]
     fn crlf_buffers_and_replacements_are_clean_and_keep_lone_cr() {
         let mut buffer = Buffer::new("one\r\ntwo\rthree\r\nlast\r");
         assert_eq!(buffer.text(), "one\ntwo\rthree\nlast\r");
@@ -1675,5 +1798,25 @@ mod tests {
         }
         assert_eq!(buffer.undo_stack.len(), 0);
         assert_eq!(buffer.redo_stack.len(), MAX_UNDO_DEPTH);
+    }
+}
+
+#[cfg(test)]
+mod mouse_tests {
+    use super::*;
+
+    #[test]
+    fn mouse_word_selection_preserves_unicode_graphemes_and_undo() {
+        let mut buffer = Buffer::new("hello café 👩‍💻 world");
+        buffer.key("i");
+        buffer.col = "hello ca".len();
+        buffer.select_word_with_mouse();
+        assert_eq!(buffer.selected_range(0), Some(6..11));
+        buffer.key("d");
+        assert_eq!(buffer.text(), "hello  👩‍💻 world");
+        buffer.key("u");
+        assert_eq!(buffer.text(), "hello café 👩‍💻 world");
+        buffer.select_with_mouse((0, 12), (0, 13));
+        assert_eq!(buffer.selected_range(0), Some(12..23));
     }
 }

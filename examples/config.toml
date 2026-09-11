@@ -3,6 +3,9 @@
 # font_family = "Menlo" # Default: Consolas on Windows, Menlo elsewhere.
 font_size = 15
 line_height = 30
+# Markdown column maximum in logical pixels (320–1600); shrinks with the window.
+writing_width = 820
+markdown_line_numbers = false
 explorer_width = 290
 terminal_height = 240
 # Toggle the right dock with Ctrl-E; drag its left edge to resize.
@@ -63,6 +66,12 @@ thickness = 1.5
 # Supported actions: save, paste (clipboard), explorer (toggle), terminal,
 # editor, help, buffer-delete, previous-buffer, next-buffer.
 [keys]
+cmd-n = "new"
+ctrl-n = "new"
+cmd-o = "open"
+ctrl-o = "open"
+cmd-shift-s = "save-as"
+ctrl-shift-s = "save-as"
 cmd-s = "save"
 ctrl-s = "save"
 cmd-v = "paste"

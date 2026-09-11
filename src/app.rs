@@ -20,6 +20,9 @@ actions!(
     rockdown,
     [
         Save,
+        NewDocument,
+        OpenDocument,
+        SaveAs,
         Paste,
         ExplorerToggle,
         TerminalToggle,
@@ -38,6 +41,9 @@ pub fn bind_config_keys(config: &Config, cx: &mut App) {
     cx.bind_keys(config.keys.iter().filter_map(|(key, action)| {
         let action: Box<dyn Action> = match action.as_str() {
             "save" => Box::new(Save),
+            "new" => Box::new(NewDocument),
+            "open" => Box::new(OpenDocument),
+            "save-as" => Box::new(SaveAs),
             "paste" => Box::new(Paste),
             "explorer" => Box::new(ExplorerToggle),
             "terminal" => Box::new(TerminalToggle),
@@ -68,6 +74,8 @@ impl Pane {
     }
 }
 
+type CloseContinuation = (Option<u64>, Vec<(u64, String)>);
+
 pub struct Workspace {
     pub config: Config,
     pub config_path: Option<PathBuf>,
@@ -75,6 +83,8 @@ pub struct Workspace {
     pub explorer: Explorer,
     pub explorer_visible: bool,
     explorer_resize: Option<(Pixels, f32)>,
+    mouse_anchor: Option<(Pane, usize, usize)>,
+    preferred_visual_x: Option<Pixels>,
     pub terminal: Option<Terminal>,
     pub terminal_visible: bool,
     terminal_task: Option<Task<()>>,
@@ -89,6 +99,7 @@ pub struct Workspace {
     pub message: String,
     pub help: bool,
     pub marked: Option<Range<usize>>,
+    dialog_pending: bool,
     search: String,
     window_prefix: bool,
     pub follow_cursor: bool,
@@ -113,13 +124,16 @@ impl Workspace {
         } else {
             Vec::new()
         };
+        let explorer_visible = document.path.is_none();
         Self {
             config,
             config_path,
             documents: crate::documents::Documents::new(document),
             explorer,
-            explorer_visible: true,
+            explorer_visible,
             explorer_resize: None,
+            mouse_anchor: None,
+            preferred_visual_x: None,
             terminal: None,
             terminal_visible: false,
             terminal_task: None,
@@ -131,11 +145,15 @@ impl Workspace {
             row_heights: Default::default(),
             projection,
             command: None,
-            message:
-                "F1 help  ·  :w filename.md to save  ·  Ctrl-E toggle files  ·  Ctrl-` terminal"
-                    .into(),
+            message: if cfg!(target_os = "macos") {
+                "i to write  ·  Cmd-S save  ·  F1 help"
+            } else {
+                "i to write  ·  Ctrl-S save  ·  F1 help"
+            }
+            .into(),
             help: false,
             marked: None,
+            dialog_pending: false,
             search: String::new(),
             window_prefix: false,
             follow_cursor: true,
@@ -207,8 +225,232 @@ impl Workspace {
             true
         }
     }
+    fn open_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_pending {
+            return;
+        }
+        self.dialog_pending = true;
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Open document".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                this.dialog_pending = false;
+                match result {
+                    Ok(Ok(Some(paths))) => {
+                        if let Some(path) = paths.first()
+                            && let Err(error) =
+                                this.change_document(|documents| documents.open(path), cx)
+                        {
+                            this.message = format!("{error:#}");
+                        }
+                    }
+                    Ok(Err(error)) => this.message = format!("{error:#}"),
+                    _ => this.message = "Open cancelled".into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn save_dialog(
+        &mut self,
+        id: u64,
+        save_as: bool,
+        close: Option<CloseContinuation>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog_pending {
+            return;
+        }
+        let Some(document) = self.documents.get(id) else {
+            return;
+        };
+        if !save_as && document.path.is_some() {
+            self.finish_save(id, None, close, window, cx);
+            return;
+        }
+        let directory = document
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or(&self.explorer.directory);
+        let name = document
+            .path
+            .as_deref()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .unwrap_or("Untitled.md");
+        let receiver = cx.prompt_for_new_path(directory, Some(name));
+        self.dialog_pending = true;
+        cx.spawn_in(window, async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.dialog_pending = false;
+                match result {
+                    Ok(Ok(Some(path))) => this.finish_save(id, Some(&path), close, window, cx),
+                    Ok(Err(error)) => this.message = format!("{error:#}"),
+                    _ => this.message = "Save cancelled".into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn finish_save(
+        &mut self,
+        id: u64,
+        path: Option<&Path>,
+        close: Option<CloseContinuation>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.documents.save_id(id, path) {
+            Ok(()) => {
+                self.refresh_projection();
+                self.message = format!(
+                    "Saved {}",
+                    self.documents
+                        .get(id)
+                        .and_then(|doc| doc.path.as_ref())
+                        .unwrap()
+                        .display()
+                );
+                if !self.explorer.dirty()
+                    && let Err(error) = self.explorer.reload()
+                {
+                    self.message
+                        .push_str(&format!(" · Files refresh failed: {error:#}"));
+                }
+                if let Some((target, discarded)) = close {
+                    self.request_close(target, discarded, window, cx);
+                }
+            }
+            Err(error) => self.message = format!("{error:#}"),
+        }
+        cx.notify();
+    }
+
+    /// The OS close callback always defers removal to the same guarded workflow as tabs.
+    pub fn request_window_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.request_close(None, Vec::new(), window, cx);
+        false
+    }
+
+    fn request_close(
+        &mut self,
+        target: Option<u64>,
+        discarded: Vec<(u64, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog_pending {
+            return;
+        }
+        let pending = self
+            .documents
+            .entries()
+            .iter()
+            .find(|entry| {
+                target.is_none_or(|id| id == entry.id)
+                    && entry.document.buffer.dirty()
+                    && !discarded.contains(&(entry.id, entry.document.buffer.text()))
+            })
+            .map(|entry| {
+                (
+                    entry.id,
+                    entry.document.buffer.text(),
+                    entry
+                        .document
+                        .path
+                        .as_ref()
+                        .map_or("Untitled".into(), |path| path.display().to_string()),
+                )
+            });
+        // Explorer decisions are explicit: saving staged operations can move or trash files.
+        let pending = pending.or_else(|| {
+            let snapshot = format!(
+                "{}\n{}\n{}",
+                self.explorer.directory.display(),
+                self.explorer.buffer.revision(),
+                self.explorer.buffer.text()
+            );
+            (target.is_none()
+                && self.explorer.dirty()
+                && !discarded.contains(&(0, snapshot.clone())))
+            .then_some((
+                0,
+                snapshot,
+                "staged Files changes (renames, creations and moves to trash)".into(),
+            ))
+        });
+        let Some((id, snapshot, name)) = pending else {
+            if let Some(id) = target {
+                self.delete_tab(id, window, cx);
+            } else {
+                window.remove_window();
+            }
+            return;
+        };
+        let receiver = window.prompt(
+            PromptLevel::Warning,
+            &format!("Save changes to {name}?"),
+            Some("Unsaved changes will be lost if you discard them."),
+            &["Save", "Discard", "Cancel"],
+            cx,
+        );
+        self.dialog_pending = true;
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = receiver.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.dialog_pending = false;
+                match answer {
+                    Ok(0) if id == 0 => {
+                        // Recheck the staged contents before applying the operations that were shown.
+                        let current = format!(
+                            "{}\n{}\n{}",
+                            this.explorer.directory.display(),
+                            this.explorer.buffer.revision(),
+                            this.explorer.buffer.text()
+                        );
+                        if current != snapshot {
+                            this.request_close(target, discarded, window, cx);
+                            return;
+                        }
+                        match this.explorer.commit() {
+                            Ok(report) => {
+                                this.documents.reconcile(&report);
+                                this.refresh_projection();
+                                this.request_close(target, discarded, window, cx);
+                            }
+                            Err(error) => this.message = format!("{error:#}"),
+                        }
+                    }
+                    Ok(0) => this.save_dialog(id, false, Some((target, discarded)), window, cx),
+                    Ok(1) => {
+                        let mut discarded = discarded;
+                        discarded.push((id, snapshot));
+                        this.request_close(target, discarded, window, cx);
+                    }
+                    _ => this.message = "Close cancelled".into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn set_pane(&mut self, pane: Pane, cx: &mut Context<Self>) {
         self.viewport_alignment = None;
+        self.preferred_visual_x = None;
+        self.mouse_anchor = None;
         if pane == Pane::Explorer {
             self.explorer_visible = true;
         }
@@ -368,7 +610,22 @@ impl Workspace {
     }
     fn action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
         match action {
-            "save" => self.save(None, false)?,
+            "new" => self.change_document(
+                |documents| {
+                    documents.new_document();
+                    Ok(())
+                },
+                cx,
+            )?,
+            "open" => self.open_dialog(window, cx),
+            "save-as" => self.save_dialog(self.documents.active_id(), true, None, window, cx),
+            "save" => {
+                if self.pane == Pane::Explorer {
+                    self.save(None, false)?;
+                } else {
+                    self.save_dialog(self.documents.active_id(), false, None, window, cx);
+                }
+            }
             "explorer" => self.toggle_explorer(cx),
             "terminal" => self.toggle_terminal(cx)?,
             "editor" => self.set_pane(Pane::Editor, cx),
@@ -387,7 +644,7 @@ impl Workspace {
                 },
                 cx,
             )?,
-            "buffer-delete" => self.change_document(|documents| documents.delete(false), cx)?,
+            "buffer-delete" => self.close_tab(self.documents.active_id(), window, cx),
             "paste" => {
                 if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                     self.type_text(&text);
@@ -460,14 +717,10 @@ impl Workspace {
             "w" | "w!" => self.save((!arg.is_empty()).then(|| Path::new(arg)), verb == "w!")?,
             "wq" => {
                 self.save((!arg.is_empty()).then(|| Path::new(arg)), false)?;
-                if self.can_close(cx) {
-                    window.remove_window();
-                }
+                self.request_window_close(window, cx);
             }
             "q" => {
-                if self.can_close(cx) {
-                    window.remove_window();
-                }
+                self.request_window_close(window, cx);
             }
             "q!" => window.remove_window(),
             "bp" | "bprevious" | "previous-buffer" => self.change_document(
@@ -577,9 +830,7 @@ impl Workspace {
         // bind_config_keys); this handler only covers the hardcoded keys.
         let key = crate::keyboard::key(stroke);
         if stroke.modifiers.platform && stroke.key == "q" {
-            if self.can_close(cx) {
-                window.remove_window();
-            }
+            self.request_window_close(window, cx);
             return Ok(true);
         }
         if self.help {
@@ -680,13 +931,26 @@ impl Workspace {
             && !stroke.modifiers.platform
             && !stroke.modifiers.alt
         {
+            self.preferred_visual_x = None;
+            let continue_markdown = self.documents.current().is_markdown()
+                && self.projection.get(self.buffer().row).is_some_and(|line| {
+                    matches!(
+                        line.kind,
+                        markdown::BlockKind::List | markdown::BlockKind::Quote
+                    )
+                })
+                && !stroke.modifiers.shift;
             let buffer = self.buffer_mut();
             match buffer.mode {
                 Mode::Normal => {
                     buffer.key("o");
                 }
                 Mode::Insert => {
-                    buffer.key("enter");
+                    if continue_markdown {
+                        buffer.markdown_enter();
+                    } else {
+                        buffer.key("enter");
+                    }
                 }
                 Mode::Visual => {
                     buffer.key("c");
@@ -698,6 +962,53 @@ impl Workspace {
             return Ok(true);
         }
         let insert = self.buffer().mode == Mode::Insert;
+        if insert
+            && self.pane == Pane::Editor
+            && self.documents.current().is_markdown()
+            && !stroke.modifiers.control
+            && !stroke.modifiers.alt
+            && !stroke.modifiers.platform
+            && matches!(key, "up" | "down")
+            && let Some(row) = self.editable_navigation_row(self.buffer().row, window)
+        {
+            let position = row.position_for_index(self.buffer().col);
+            let x = self.preferred_visual_x.unwrap_or(position.x);
+            let y = position.y + row.line_height * if key == "up" { -0.5 } else { 1.5 };
+            let destination = if y >= px(0.) && y < row.height {
+                Some((row.source_row, row.index_for_position(point(x, y))))
+            } else {
+                let next = if key == "up" {
+                    row.source_row.checked_sub(1)
+                } else {
+                    (row.source_row + 1 < self.buffer().lines.len()).then_some(row.source_row + 1)
+                };
+                next.and_then(|next| self.editable_navigation_row(next, window))
+                    .map(|next| {
+                        let y = if key == "up" {
+                            next.height - next.line_height * 0.5
+                        } else {
+                            next.line_height * 0.5
+                        };
+                        (next.source_row, next.index_for_position(point(x, y)))
+                    })
+            };
+            if let Some((row, col)) = destination {
+                let buffer = self.buffer_mut();
+                buffer.row = row;
+                buffer.col = buffer.lines[row]
+                    .text
+                    .grapheme_indices(true)
+                    .map(|(i, _)| i)
+                    .chain(std::iter::once(buffer.lines[row].text.len()))
+                    .take_while(|i| *i <= col)
+                    .last()
+                    .unwrap_or(0);
+            }
+            self.preferred_visual_x = Some(x);
+            self.marked = None;
+            return Ok(true);
+        }
+        self.preferred_visual_x = None;
         if !insert && !stroke.modifiers.control && !stroke.modifiers.platform {
             if key == ":" || key == "/" {
                 self.command = Some(key.into());
@@ -778,6 +1089,7 @@ impl Workspace {
         Ok(true)
     }
     fn type_text(&mut self, text: &str) {
+        self.preferred_visual_x = None;
         if let Some(command) = &mut self.command {
             command.push_str(&text.replace(['\r', '\n'], ""));
         } else if self.pane == Pane::Terminal {
@@ -799,6 +1111,96 @@ impl Workspace {
         }
         self.follow_cursor = true;
     }
+    /// Shape the destination as editable source, even while it is still shown as preview.
+    /// This keeps arrow movement stable across Markdown syntax and heading font changes.
+    fn editable_navigation_row(
+        &self,
+        source_row: usize,
+        window: &mut Window,
+    ) -> Option<crate::surface::HitRow> {
+        let width = self.layouts[Pane::Editor.index()].text_width;
+        if width <= px(0.) {
+            return None;
+        }
+        let text: SharedString = self.buffer().lines.get(source_row)?.text.clone().into();
+        let runs = [TextRun {
+            len: text.len(),
+            font: font(self.config.font_family.clone()),
+            color: self.color(&self.config.theme.foreground),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }];
+        let line =
+            window
+                .text_system()
+                .shape_line(text.clone(), px(self.config.font_size), &runs, None);
+        let wrap = self
+            .projection
+            .get(source_row)
+            .is_some_and(|row| row.table.is_none() && row.kind != markdown::BlockKind::Code);
+        let wrapped = if wrap && line.width > width {
+            window
+                .text_system()
+                .shape_text(text, px(self.config.font_size), &runs, Some(width), None)
+                .ok()?
+                .pop()
+        } else {
+            None
+        };
+        let line_height = px(self.config.line_height);
+        let height = line_height
+            * wrapped
+                .as_ref()
+                .map_or(1, |line| line.wrap_boundaries.len() + 1) as f32;
+        Some(crate::surface::HitRow {
+            source_row,
+            origin: point(px(0.), px(0.)),
+            line,
+            raw: true,
+            wrapped,
+            line_height,
+            height,
+        })
+    }
+
+    fn mouse_location(&self, pane: Pane, position: Point<Pixels>) -> Option<(usize, usize)> {
+        let row = self.layouts[pane.index()]
+            .rows
+            .iter()
+            .find(|row| position.y >= row.origin.y && position.y < row.origin.y + row.height)?;
+        let index = row.index_for_position(position);
+        Some((
+            row.source_row,
+            if row.raw {
+                index
+            } else {
+                self.projection
+                    .get(row.source_row)
+                    .map_or(0, |projection| projection.source_column(index))
+            },
+        ))
+    }
+
+    fn mouse_move(&mut self, pane: Pane, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.mouse_anchor = None;
+            return;
+        }
+        let Some((anchor_pane, row, col)) = self.mouse_anchor else {
+            return;
+        };
+        if anchor_pane != pane {
+            return;
+        }
+        if let Some(head) = self.mouse_location(pane, event.position)
+            && (head != (row, col) || self.buffer().mode == Mode::Visual)
+        {
+            self.buffer_mut().select_with_mouse((row, col), head);
+            cx.notify();
+        }
+    }
+
     pub fn mouse_down(
         &mut self,
         pane: Pane,
@@ -806,35 +1208,78 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.mouse_anchor = None;
+        self.preferred_visual_x = None;
         let hit = self.layouts[pane.index()].rows.iter().find(|row| {
             event.position.y >= row.origin.y && event.position.y < row.origin.y + row.height
         });
-        let location = hit.map(|row| {
-            (
-                row.source_row,
-                if row.raw {
-                    row.line
-                        .closest_index_for_x(event.position.x - row.origin.x)
-                } else {
-                    0
-                },
-            )
+        let task = hit.and_then(|row| {
+            if pane != Pane::Editor
+                || !self.documents.current().is_markdown()
+                || event.click_count != 1
+                || event.modifiers.shift
+                || event.modifiers.control
+                || event.modifiers.alt
+                || event.modifiers.platform
+            {
+                return None;
+            }
+            let marker = self.projection.get(row.source_row)?.task_marker?;
+            let display = if row.raw {
+                marker
+            } else {
+                row.line
+                    .text
+                    .find("[ ]")
+                    .or_else(|| row.line.text.find("[x]"))?
+            };
+            // Check actual glyph rectangles: a narrow column can wrap even the
+            // marker, and later visual rows must remain ordinary text targets.
+            (display..display + 3)
+                .any(|index| {
+                    let origin = row.position_for_index(index);
+                    let width = row.line.x_for_index(index + 1) - row.line.x_for_index(index);
+                    event.position.x >= origin.x
+                        && event.position.x < origin.x + width
+                        && event.position.y >= origin.y
+                        && event.position.y < origin.y + row.line_height
+                })
+                .then_some((row.source_row, marker))
         });
+        if let Some((row, marker)) = task {
+            self.set_pane(pane, cx);
+            self.focus.focus(window);
+            if self.buffer_mut().toggle_markdown_task(row, marker) {
+                self.marked = None;
+                self.refresh_projection();
+            }
+            cx.notify();
+            return;
+        }
+        let location = self.mouse_location(pane, event.position);
         self.set_pane(pane, cx);
         self.focus.focus(window);
         if pane != Pane::Terminal
             && let Some((row, col)) = location
         {
-            self.buffer_mut().key("escape");
+            if self.buffer().mode != Mode::Insert {
+                self.buffer_mut().key("escape");
+            }
             let buffer = self.buffer_mut();
             buffer.row = row.min(buffer.lines.len() - 1);
             let text = &buffer.lines[buffer.row].text;
             buffer.col = text
                 .grapheme_indices(true)
                 .map(|(i, _)| i)
+                .chain((buffer.mode == Mode::Insert).then_some(text.len()))
                 .take_while(|i| *i <= col)
                 .last()
                 .unwrap_or(0);
+            if event.click_count == 2 {
+                buffer.select_word_with_mouse();
+            } else {
+                self.mouse_anchor = Some((pane, buffer.row, buffer.col));
+            }
         }
         cx.notify();
     }
@@ -903,10 +1348,10 @@ impl Workspace {
         }
         if self.follow_cursor && pane == self.pane && pane != Pane::Terminal {
             let row = self.buffer().row;
-            self.scroll_offsets[pane.index()] = 0.;
             let top = &mut self.tops[pane.index()];
             if row < *top {
                 *top = row;
+                self.scroll_offsets[pane.index()] = 0.;
             } else if row >= *top + rows {
                 *top = row.saturating_sub(rows.saturating_sub(1));
             }
@@ -918,11 +1363,15 @@ impl Workspace {
             .is_some_and(|(target, _)| target == pane)
     }
     fn close_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.request_close(Some(id), Vec::new(), window, cx);
+    }
+
+    fn delete_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.documents.active_id();
         let result = self.change_document(
             |documents| {
                 documents.select(id)?;
-                documents.delete(false)?;
+                documents.delete(true)?;
                 if id != active {
                     documents.select(active)?;
                 }
@@ -952,79 +1401,85 @@ impl Workspace {
             .overflow_x_scroll()
             .bg(panel)
             .text_xs()
-            .children(
-                self.documents
-                    .entries()
-                    .iter()
-                    .enumerate()
-                    .map(|(index, entry)| {
-                        let id = entry.id;
-                        let name = entry
-                            .document
-                            .path
-                            .as_ref()
-                            .and_then(|path| path.file_name())
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "Untitled".into());
-                        let label = format!(
-                            "{}: {}{}",
-                            index + 1,
-                            name,
-                            if entry.document.buffer.dirty() {
-                                " [+]"
-                            } else {
-                                ""
-                            }
-                        );
+            .children(self.documents.entries().iter().map(|entry| {
+                let id = entry.id;
+                let name = entry
+                    .document
+                    .path
+                    .as_ref()
+                    .and_then(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Untitled".into());
+                let label = format!(
+                    "{}{}",
+                    name,
+                    if entry.document.buffer.dirty() {
+                        " •"
+                    } else {
+                        ""
+                    }
+                );
+                let path = entry
+                    .document
+                    .path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "Untitled".into());
+                div()
+                    .id(("buffer-tab", id))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| ControlTooltip {
+                            label: path.clone().into(),
+                            background,
+                            foreground: muted,
+                            border: accent.opacity(0.3),
+                        })
+                        .into()
+                    })
+                    .h_full()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .flex_shrink_0()
+                    .cursor_pointer()
+                    .bg(if id == active { background } else { panel })
+                    .hover(|style| style.bg(accent.opacity(0.12)).text_color(accent))
+                    .active(|style| style.bg(accent.opacity(0.22)))
+                    .text_color(if id == active { accent } else { muted })
+                    .border_b_2()
+                    .border_color(if id == active { accent } else { panel })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Err(error) =
+                            this.change_document(|documents| documents.select(id), cx)
+                        {
+                            this.message = error.to_string();
+                        }
+                        this.focus.focus(window);
+                        cx.notify();
+                    }))
+                    .child(label)
+                    .child(
                         div()
-                            .id(("buffer-tab", id))
-                            .h_full()
-                            .px_3()
+                            .id(("close-buffer", id))
+                            .w(px(22.))
+                            .h(px(22.))
                             .flex()
                             .items_center()
-                            .gap_3()
-                            .flex_shrink_0()
+                            .justify_center()
+                            .rounded_md()
                             .cursor_pointer()
-                            .bg(if id == active { background } else { panel })
-                            .hover(|style| style.bg(accent.opacity(0.12)).text_color(accent))
-                            .active(|style| style.bg(accent.opacity(0.22)))
-                            .text_color(if id == active { accent } else { muted })
-                            .border_b_2()
-                            .border_color(if id == active { accent } else { panel })
+                            .text_size(px(17.))
+                            .text_color(muted)
+                            .hover(|style| style.bg(accent.opacity(0.18)).text_color(accent))
+                            .active(|style| style.bg(accent.opacity(0.3)))
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                if let Err(error) =
-                                    this.change_document(|documents| documents.select(id), cx)
-                                {
-                                    this.message = error.to_string();
-                                }
-                                this.focus.focus(window);
-                                cx.notify();
+                                cx.stop_propagation();
+                                this.close_tab(id, window, cx);
                             }))
-                            .child(label)
-                            .child(
-                                div()
-                                    .id(("close-buffer", id))
-                                    .w(px(22.))
-                                    .h(px(22.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .text_size(px(17.))
-                                    .text_color(muted)
-                                    .hover(|style| {
-                                        style.bg(accent.opacity(0.18)).text_color(accent)
-                                    })
-                                    .active(|style| style.bg(accent.opacity(0.3)))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        cx.stop_propagation();
-                                        this.close_tab(id, window, cx);
-                                    }))
-                                    .child("×"),
-                            )
-                    }),
-            )
+                            .child("×"),
+                    )
+            }))
     }
 
     fn dock_button(
@@ -1061,7 +1516,7 @@ impl Workspace {
             .active(|style| style.bg(accent.opacity(0.3)))
             .tooltip(move |_, cx| {
                 cx.new(|_| ControlTooltip {
-                    label,
+                    label: label.into(),
                     background,
                     foreground,
                     border: accent.opacity(0.3),
@@ -1136,6 +1591,15 @@ impl Workspace {
                     this.mouse_down(pane, event, window, cx)
                 }),
             )
+            .on_mouse_move(cx.listener(move |this, event, _, cx| this.mouse_move(pane, event, cx)))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.mouse_anchor = None),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.mouse_anchor = None),
+            )
             .on_scroll_wheel(cx.listener(move |this, event, _, cx| this.scroll(pane, event, cx)))
             .child(Surface {
                 workspace: cx.entity(),
@@ -1151,22 +1615,6 @@ impl Render for Workspace {
         let foreground = self.color(&self.config.theme.foreground);
         let muted = self.color(&self.config.theme.muted);
         let accent = self.color(&self.config.theme.accent);
-        let path = self
-            .documents
-            .current()
-            .path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "Untitled — :w filename.md".into());
-        let title = format!(
-            "{}{}",
-            path,
-            if self.documents.current().buffer.dirty() {
-                "  [+]"
-            } else {
-                ""
-            }
-        );
         let mode = if self.pane == Pane::Terminal {
             "TERMINAL"
         } else {
@@ -1204,6 +1652,9 @@ impl Render for Workspace {
         div().size_full().flex().flex_col().bg(background).text_color(foreground).font_family(self.config.font_family.clone()).text_size(px(self.config.font_size))
             .track_focus(&self.focus).on_key_down(cx.listener(Self::key_down))
             .on_action(cx.listener(|this, _: &Save, window, cx| this.run_action("save", window, cx)))
+            .on_action(cx.listener(|this, _: &NewDocument, window, cx| this.run_action("new", window, cx)))
+            .on_action(cx.listener(|this, _: &OpenDocument, window, cx| this.run_action("open", window, cx)))
+            .on_action(cx.listener(|this, _: &SaveAs, window, cx| this.run_action("save-as", window, cx)))
             .on_action(cx.listener(|this, _: &Paste, window, cx| this.run_action("paste", window, cx)))
             .on_action(cx.listener(|this, _: &ExplorerToggle, window, cx| this.run_action("explorer", window, cx)))
             .on_action(cx.listener(|this, _: &TerminalToggle, window, cx| this.run_action("terminal", window, cx)))
@@ -1233,15 +1684,17 @@ impl Render for Workspace {
             .child(div().flex_1().min_h_0().flex()
                 .child(div().flex_1().min_w_0().flex().flex_col()
                     .child(self.buffer_bar(cx))
-                    .child(div().h(px(38.)).flex_shrink_0().px_4().flex().items_center().text_sm().text_color(muted).overflow_hidden().child(title))
-                    .child(div().flex_1().min_h_0().child(self.surface(Pane::Editor,cx))))
+                    .child(div().flex_1().min_h_0().flex().justify_center()
+                        .child(div().w_full().min_w_0().h_full()
+                            .when(self.documents.current().is_markdown(), |column| column.max_w(px(self.config.writing_width)).py_4())
+                            .child(self.surface(Pane::Editor,cx)))))
                 .when(self.explorer_visible, |body| body.child(div().w(px(explorer_width)).flex_shrink_0().flex().bg(panel)
                     .child(div().id("explorer-splitter").w(px(6.)).flex_shrink_0().h_full().cursor(CursorStyle::ResizeLeftRight)
                         .bg(if self.pane==Pane::Explorer {accent} else {background})
                         .hover(|style| style.bg(accent))
                         .on_mouse_down(MouseButton::Left, cx.listener(Self::start_explorer_resize)))
                     .child(div().flex_1().min_w_0().flex().flex_col()
-                        .child(div().h(px(38.)).flex_shrink_0().px_3().flex().items_center().text_xs().text_color(muted).child(if self.explorer.dirty() { "Files  [+]" } else { "Files" }))
+                        .child(div().h(px(38.)).flex_shrink_0().px_3().flex().items_center().text_xs().text_color(muted).child(if self.explorer.dirty() { "Files  •" } else { "Files" }))
                         .child(div().px_3().pb_2().text_xs().text_color(muted).overflow_hidden().child(self.explorer.directory.display().to_string()))
                         .child(div().flex_1().min_h_0().child(self.surface(Pane::Explorer,cx)))))))
             .when(self.terminal_visible, |root| root.child(div().h(px(self.config.terminal_height)).flex_shrink_0().flex().flex_col().border_t_1().border_color(accent).bg(background)
@@ -1255,17 +1708,17 @@ impl Render for Workspace {
                 .children(HELP.lines().map(|line| div().flex_shrink_0().text_sm().child(line.to_string())))
                 .child(div().flex_shrink_0().text_sm().child("Prose wraps. Local images render inline; remote images stay linked alt text (no network requests)."))))
             .child(div().h(px(34.)).flex_shrink_0().px_2().flex().items_center().gap_3().bg(panel).text_xs()
-                .child(self.dock_button(if self.terminal_visible { "Hide Terminal" } else { "Show Terminal" }, "terminal", self.terminal_visible, cx))
                 .child(div().flex_shrink_0().text_color(accent).font_weight(FontWeight::BOLD).child(mode))
                 .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().child(status))
                 .child(div().flex_shrink_0().text_color(muted).child(location))
+                .when(self.terminal_visible, |footer| footer.child(self.dock_button("Hide Terminal", "terminal", true, cx)))
                 .child(self.dock_button(explorer_label, "explorer", self.explorer_visible, cx))
                 .child(self.dock_button(if self.help { "Hide Help" } else { "Show Help" }, "help", self.help, cx)))
     }
 }
 
 struct ControlTooltip {
-    label: &'static str,
+    label: SharedString,
     background: Hsla,
     foreground: Hsla,
     border: Hsla,
@@ -1282,12 +1735,13 @@ impl Render for ControlTooltip {
             .bg(self.background)
             .text_color(self.foreground)
             .text_size(px(12.))
-            .child(self.label)
+            .child(self.label.clone())
     }
 }
 
 const HELP: &str = r#"Editing: i/a/I/A insert · o/O new line · Esc normal · v visual
-Return splits at the caret in Insert mode; in Normal mode it opens a line below.
+Return splits at the caret and continues Markdown lists/quotes in Insert mode.
+Shift-Return inserts a literal newline; Normal-mode Return opens a line below.
 h/j/k/l or arrows · w/b/e words · 0/$ line · gg/G document
 x delete · dd/dw/d$ delete · cc/cw change · yy yank · p/P paste
 u undo · Ctrl-R redo · counts: 3j, 2dd · /find then n repeat
@@ -1295,7 +1749,7 @@ Clipboard: Ctrl-C/V in Editor and Files (Cmd-C/V on macOS).
 Ctrl-Shift-V pastes in every pane; terminal paste respects bracketed-paste mode.
 Images render at 60% of the pane width; ![alt](pic.png "40%") or "320px" resizes.
 :w [filename] save · :w! overwrite conflict · :e[!] [file] reload/open
-:q close window · :q! discard all and close · :wq save and close
+:q close with Save / Discard / Cancel · :q! discard all and close · :wq save and close
 
 Buffers: click a tab to select; click its × to close. Unsaved changes are protected.
 :bp / :bprevious / :previous-buffer · Ctrl-PageUp
@@ -1324,7 +1778,9 @@ markdown.divider: color, thickness (also used by heading underlines).
 Preview applies to .md filenames (case-insensitive) and untitled buffers only.
 Other filenames show literal text. In Markdown, inactive lines render;
 the cursor line exposes editable syntax. Save-as updates the preview type.
-Click a line to edit. Mouse wheel scrolls. Ctrl-S saves. Esc closes help."#;
+New: Ctrl/Cmd-N · Open: Ctrl/Cmd-O · Save: Ctrl/Cmd-S · Save As: Ctrl/Cmd-Shift-S
+Click text to position the caret; double-click selects a word, drag selects text.
+Click task markers to toggle them. Mouse wheel scrolls. Esc closes help."#;
 
 fn utf8_offset(text: &str, utf16: usize) -> usize {
     let mut units = 0;
@@ -1480,7 +1936,7 @@ impl EntityInputHandler for Workspace {
         let start = utf8_offset(self.input_text(), range.start);
         Some(
             Bounds::new(
-                point(row.origin.x + row.line.x_for_index(start), row.origin.y),
+                row.position_for_index(start),
                 size(px(2.), px(self.config.line_height)),
             )
             .intersect(&bounds),
@@ -1498,7 +1954,7 @@ impl EntityInputHandler for Workspace {
             .find(|r| r.source_row == self.buffer().row)?;
         Some(utf16_offset(
             self.input_text(),
-            row.line.closest_index_for_x(position.x - row.origin.x),
+            row.index_for_position(position),
         ))
     }
 }
