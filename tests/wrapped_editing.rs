@@ -126,3 +126,79 @@ fn caret_remains_visible_inside_a_paragraph_taller_than_the_viewport(cx: &mut Te
     window.run_until_parked();
     window.update(|_, cx| assert!(view.read(cx).scroll_offsets[Pane::Editor.index()] < 5.));
 }
+
+#[gpui::test]
+fn insert_arrows_cross_paragraph_boundaries_using_editable_visual_rows(cx: &mut TestAppContext) {
+    let paragraph = "words filling a long paragraph across several visual rows ".repeat(5);
+    let text = format!("{paragraph}\nmiddle row\n# {paragraph}");
+    let (_directory, mut window, view) = editor(cx, &text);
+    window.simulate_keystrokes("j l l l i");
+    window.run_until_parked();
+    window.update(|_, cx| {
+        let buffer = &view.read(cx).documents.current().buffer;
+        assert_eq!((buffer.row, buffer.col), (1, 3));
+    });
+    window.simulate_keystrokes("up");
+    window.run_until_parked();
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        let buffer = &app.documents.current().buffer;
+        assert_eq!(buffer.row, 0);
+        let row = app.layouts[Pane::Editor.index()]
+            .rows
+            .iter()
+            .find(|row| row.source_row == 0)
+            .unwrap();
+        assert!(row.wrapped.is_some());
+        let caret = row.position_for_index(buffer.col);
+        assert_eq!(caret.y, row.origin.y + row.height - row.line_height);
+        assert!(
+            buffer.col > 3,
+            "Up must enter the last visual row, not the first"
+        );
+    });
+    window.simulate_keystrokes("down");
+    window.run_until_parked();
+    window.update(|_, cx| {
+        let buffer = &view.read(cx).documents.current().buffer;
+        assert_eq!(
+            (buffer.row, buffer.col),
+            (1, 3),
+            "Crossing back preserves preferred screen x"
+        );
+    });
+    window.simulate_keystrokes("down");
+    window.run_until_parked();
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        let buffer = &app.documents.current().buffer;
+        assert_eq!(
+            (buffer.row, buffer.col),
+            (2, 3),
+            "Destination is shaped as source, including heading syntax"
+        );
+        let row = app.layouts[Pane::Editor.index()]
+            .rows
+            .iter()
+            .find(|row| row.source_row == 2)
+            .unwrap();
+        assert!(row.raw && row.wrapped.is_some());
+        assert_eq!(row.position_for_index(buffer.col).y, row.origin.y);
+    });
+    window.simulate_keystrokes("up");
+    window.run_until_parked();
+    window.update(|_, cx| {
+        let buffer = &view.read(cx).documents.current().buffer;
+        assert_eq!((buffer.row, buffer.col), (1, 3));
+    });
+    window.simulate_keystrokes("escape k");
+    window.run_until_parked();
+    window.update(|_, cx| {
+        let buffer = &view.read(cx).documents.current().buffer;
+        assert_eq!(
+            (buffer.mode, buffer.row),
+            (Mode::Normal, 0),
+            "Vim k still moves by source line"
+        );
+    });
+}

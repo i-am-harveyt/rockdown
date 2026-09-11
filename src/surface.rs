@@ -112,6 +112,7 @@ fn load_image(path: &Path) -> Option<Arc<RenderImage>> {
 #[derive(Default)]
 pub struct SurfaceLayout {
     pub rows: Vec<HitRow>,
+    pub text_width: Pixels,
 }
 pub struct HitRow {
     pub source_row: usize,
@@ -470,6 +471,7 @@ impl Element for Surface {
                 16.
             };
             let available = (bounds.size.width - px(gutter + 24.)).max(px(1.));
+            result.layout.text_width = available;
             let style = SpanStyle {
                 font: font.clone(),
                 font_size: px(app.config.font_size),

@@ -449,6 +449,8 @@ impl Workspace {
 
     fn set_pane(&mut self, pane: Pane, cx: &mut Context<Self>) {
         self.viewport_alignment = None;
+        self.preferred_visual_x = None;
+        self.mouse_anchor = None;
         if pane == Pane::Explorer {
             self.explorer_visible = true;
         }
@@ -929,13 +931,26 @@ impl Workspace {
             && !stroke.modifiers.platform
             && !stroke.modifiers.alt
         {
+            self.preferred_visual_x = None;
+            let continue_markdown = self.documents.current().is_markdown()
+                && self.projection.get(self.buffer().row).is_some_and(|line| {
+                    matches!(
+                        line.kind,
+                        markdown::BlockKind::List | markdown::BlockKind::Quote
+                    )
+                })
+                && !stroke.modifiers.shift;
             let buffer = self.buffer_mut();
             match buffer.mode {
                 Mode::Normal => {
                     buffer.key("o");
                 }
                 Mode::Insert => {
-                    buffer.key("enter");
+                    if continue_markdown {
+                        buffer.markdown_enter();
+                    } else {
+                        buffer.key("enter");
+                    }
                 }
                 Mode::Visual => {
                     buffer.key("c");
@@ -948,39 +963,50 @@ impl Workspace {
         }
         let insert = self.buffer().mode == Mode::Insert;
         if insert
+            && self.pane == Pane::Editor
+            && self.documents.current().is_markdown()
             && !stroke.modifiers.control
             && !stroke.modifiers.alt
             && !stroke.modifiers.platform
             && matches!(key, "up" | "down")
+            && let Some(row) = self.editable_navigation_row(self.buffer().row, window)
         {
-            let buffer = self.buffer();
-            if let Some(row) = self.layouts[self.pane.index()]
-                .rows
-                .iter()
-                .find(|row| row.source_row == buffer.row && row.wrapped.is_some())
-            {
-                let position = row.position_for_index(buffer.col);
-                let x = self.preferred_visual_x.unwrap_or(position.x - row.origin.x);
-                let target = point(
-                    row.origin.x + x,
-                    position.y + row.line_height * if key == "up" { -0.5 } else { 1.5 },
-                );
-                if target.y >= row.origin.y && target.y < row.origin.y + row.height {
-                    let col = row.index_for_position(target);
-                    let buffer = self.buffer_mut();
-                    buffer.col = buffer.lines[buffer.row]
-                        .text
-                        .grapheme_indices(true)
-                        .map(|(i, _)| i)
-                        .chain(std::iter::once(buffer.lines[buffer.row].text.len()))
-                        .take_while(|i| *i <= col)
-                        .last()
-                        .unwrap_or(0);
-                    self.preferred_visual_x = Some(x);
-                    self.marked = None;
-                    return Ok(true);
-                }
+            let position = row.position_for_index(self.buffer().col);
+            let x = self.preferred_visual_x.unwrap_or(position.x);
+            let y = position.y + row.line_height * if key == "up" { -0.5 } else { 1.5 };
+            let destination = if y >= px(0.) && y < row.height {
+                Some((row.source_row, row.index_for_position(point(x, y))))
+            } else {
+                let next = if key == "up" {
+                    row.source_row.checked_sub(1)
+                } else {
+                    (row.source_row + 1 < self.buffer().lines.len()).then_some(row.source_row + 1)
+                };
+                next.and_then(|next| self.editable_navigation_row(next, window))
+                    .map(|next| {
+                        let y = if key == "up" {
+                            next.height - next.line_height * 0.5
+                        } else {
+                            next.line_height * 0.5
+                        };
+                        (next.source_row, next.index_for_position(point(x, y)))
+                    })
+            };
+            if let Some((row, col)) = destination {
+                let buffer = self.buffer_mut();
+                buffer.row = row;
+                buffer.col = buffer.lines[row]
+                    .text
+                    .grapheme_indices(true)
+                    .map(|(i, _)| i)
+                    .chain(std::iter::once(buffer.lines[row].text.len()))
+                    .take_while(|i| *i <= col)
+                    .last()
+                    .unwrap_or(0);
             }
+            self.preferred_visual_x = Some(x);
+            self.marked = None;
+            return Ok(true);
         }
         self.preferred_visual_x = None;
         if !insert && !stroke.modifiers.control && !stroke.modifiers.platform {
@@ -1085,6 +1111,59 @@ impl Workspace {
         }
         self.follow_cursor = true;
     }
+    /// Shape the destination as editable source, even while it is still shown as preview.
+    /// This keeps arrow movement stable across Markdown syntax and heading font changes.
+    fn editable_navigation_row(
+        &self,
+        source_row: usize,
+        window: &mut Window,
+    ) -> Option<crate::surface::HitRow> {
+        let width = self.layouts[Pane::Editor.index()].text_width;
+        if width <= px(0.) {
+            return None;
+        }
+        let text: SharedString = self.buffer().lines.get(source_row)?.text.clone().into();
+        let runs = [TextRun {
+            len: text.len(),
+            font: font(self.config.font_family.clone()),
+            color: self.color(&self.config.theme.foreground),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }];
+        let line =
+            window
+                .text_system()
+                .shape_line(text.clone(), px(self.config.font_size), &runs, None);
+        let wrap = self
+            .projection
+            .get(source_row)
+            .is_some_and(|row| row.table.is_none() && row.kind != markdown::BlockKind::Code);
+        let wrapped = if wrap && line.width > width {
+            window
+                .text_system()
+                .shape_text(text, px(self.config.font_size), &runs, Some(width), None)
+                .ok()?
+                .pop()
+        } else {
+            None
+        };
+        let line_height = px(self.config.line_height);
+        let height = line_height
+            * wrapped
+                .as_ref()
+                .map_or(1, |line| line.wrap_boundaries.len() + 1) as f32;
+        Some(crate::surface::HitRow {
+            source_row,
+            origin: point(px(0.), px(0.)),
+            line,
+            raw: true,
+            wrapped,
+            line_height,
+            height,
+        })
+    }
+
     fn mouse_location(&self, pane: Pane, position: Point<Pixels>) -> Option<(usize, usize)> {
         let row = self.layouts[pane.index()]
             .rows
@@ -1129,9 +1208,55 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let location = self.mouse_location(pane, event.position);
         self.mouse_anchor = None;
         self.preferred_visual_x = None;
+        let hit = self.layouts[pane.index()].rows.iter().find(|row| {
+            event.position.y >= row.origin.y && event.position.y < row.origin.y + row.height
+        });
+        let task = hit.and_then(|row| {
+            if pane != Pane::Editor
+                || !self.documents.current().is_markdown()
+                || event.click_count != 1
+                || event.modifiers.shift
+                || event.modifiers.control
+                || event.modifiers.alt
+                || event.modifiers.platform
+            {
+                return None;
+            }
+            let marker = self.projection.get(row.source_row)?.task_marker?;
+            let display = if row.raw {
+                marker
+            } else {
+                row.line
+                    .text
+                    .find("[ ]")
+                    .or_else(|| row.line.text.find("[x]"))?
+            };
+            // Check actual glyph rectangles: a narrow column can wrap even the
+            // marker, and later visual rows must remain ordinary text targets.
+            (display..display + 3)
+                .any(|index| {
+                    let origin = row.position_for_index(index);
+                    let width = row.line.x_for_index(index + 1) - row.line.x_for_index(index);
+                    event.position.x >= origin.x
+                        && event.position.x < origin.x + width
+                        && event.position.y >= origin.y
+                        && event.position.y < origin.y + row.line_height
+                })
+                .then_some((row.source_row, marker))
+        });
+        if let Some((row, marker)) = task {
+            self.set_pane(pane, cx);
+            self.focus.focus(window);
+            if self.buffer_mut().toggle_markdown_task(row, marker) {
+                self.marked = None;
+                self.refresh_projection();
+            }
+            cx.notify();
+            return;
+        }
+        let location = self.mouse_location(pane, event.position);
         self.set_pane(pane, cx);
         self.focus.focus(window);
         if pane != Pane::Terminal
@@ -1615,7 +1740,8 @@ impl Render for ControlTooltip {
 }
 
 const HELP: &str = r#"Editing: i/a/I/A insert · o/O new line · Esc normal · v visual
-Return splits at the caret in Insert mode; in Normal mode it opens a line below.
+Return splits at the caret and continues Markdown lists/quotes in Insert mode.
+Shift-Return inserts a literal newline; Normal-mode Return opens a line below.
 h/j/k/l or arrows · w/b/e words · 0/$ line · gg/G document
 x delete · dd/dw/d$ delete · cc/cw change · yy yank · p/P paste
 u undo · Ctrl-R redo · counts: 3j, 2dd · /find then n repeat
@@ -1653,7 +1779,8 @@ Preview applies to .md filenames (case-insensitive) and untitled buffers only.
 Other filenames show literal text. In Markdown, inactive lines render;
 the cursor line exposes editable syntax. Save-as updates the preview type.
 New: Ctrl/Cmd-N · Open: Ctrl/Cmd-O · Save: Ctrl/Cmd-S · Save As: Ctrl/Cmd-Shift-S
-Click a line to edit. Mouse wheel scrolls. Esc closes help."#;
+Click text to position the caret; double-click selects a word, drag selects text.
+Click task markers to toggle them. Mouse wheel scrolls. Esc closes help."#;
 
 fn utf8_offset(text: &str, utf16: usize) -> usize {
     let mut units = 0;
