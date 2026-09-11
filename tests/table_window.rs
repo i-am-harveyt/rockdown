@@ -532,3 +532,46 @@ fn large_image_is_downscaled_and_renders_proportionally(cx: &mut TestAppContext)
     assert!(image_row.2 > 100.0);
     assert!((after.1 - (image_row.1 + image_row.2)).abs() < 0.5);
 }
+
+#[gpui::test]
+fn markdown_column_centers_and_shrinks_with_optional_gutter(cx: &mut TestAppContext) {
+    let sandbox = tempfile::tempdir().unwrap();
+    let path = sandbox.path().join("note.md");
+    std::fs::write(&path, "A short paragraph.\nAnother paragraph.").unwrap();
+    let (view, window) = cx.add_window_view(|window, cx| {
+        Workspace::new(
+            Config::default(),
+            None,
+            Document::open(&path).unwrap(),
+            Explorer::open(sandbox.path()).unwrap(),
+            window,
+            cx,
+        )
+    });
+    let mut window = window.clone();
+    window.simulate_resize(size(px(1000.), px(800.)));
+    window.run_until_parked();
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert!(!app.explorer_visible);
+        let x = f32::from(app.layouts[Pane::Editor.index()].rows[0].origin.x);
+        assert!((x - 114.).abs() < 1., "centered text starts at {x}");
+    });
+    window.update(|_, cx| {
+        view.update(cx, |app, cx| {
+            app.config.markdown_line_numbers = true;
+            cx.notify();
+        })
+    });
+    window.run_until_parked();
+    window.update(|_, cx| {
+        let x = f32::from(view.read(cx).layouts[Pane::Editor.index()].rows[0].origin.x);
+        assert!((x - 146.).abs() < 1., "numbered text starts at {x}");
+    });
+    window.simulate_resize(size(px(600.), px(800.)));
+    window.run_until_parked();
+    window.update(|_, cx| {
+        let x = f32::from(view.read(cx).layouts[Pane::Editor.index()].rows[0].origin.x);
+        assert!((x - 56.).abs() < 1., "narrow text starts at {x}");
+    });
+}
