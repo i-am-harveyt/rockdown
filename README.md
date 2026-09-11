@@ -387,3 +387,25 @@ cargo build --release --locked
 Tests cover Vim/Unicode editing, document save conflicts, buffer lifecycle, explorer operations and recovery, Markdown projection, configuration, keyboard normalization, and terminal behavior. Tests are not a substitute for native-window interaction checks when changing the UI.
 
 After rebuilding, restart any already-running Rockdown instance to use the updated executable.
+
+### Document dialogs
+
+Use **Ctrl/Cmd-N** for a new document, **Ctrl/Cmd-O** to open a file,
+**Ctrl/Cmd-S** to save, and **Ctrl/Cmd-Shift-S** for Save As. Untitled documents
+open a native save dialog. These actions also appear in the native File menu
+where the platform supports menus. Configure them using the `new`, `open`,
+`save`, and `save-as` key actions. A dot beside a document name indicates unsaved
+changes; the footer confirms saves and reports cancellation or conflicts.
+
+Closing a tab offers Save / Discard / Cancel. Window close (including `:q`)
+checks every dirty document, then explicitly asks about staged Files operations.
+Cancelling any prompt keeps the window and its documents open. Earlier successful
+saves remain saved; discarded buffers are retained until the entire close flow
+is accepted. Saving staged Files changes applies renames, creations, and moves
+to trash, just as `:w` in Files does.
+
+Colon commands remain available. In Files, Ctrl/Cmd-S still applies staged
+operations; Save As always targets the active document. Save As preserves file
+conflict and buffer-ownership checks: choosing an existing unrelated file reports
+a conflict rather than replacing it. Explicit `:w! path` is available for
+intentional overwrites. `:q!` continues to explicitly discard everything.

@@ -66,6 +66,28 @@ impl Documents {
         Ok(())
     }
 
+    pub fn new_document(&mut self) {
+        let entry = self.entry(Document::untitled(""));
+        self.entries.push(entry);
+        self.active = self.entries.len() - 1;
+    }
+
+    pub fn get(&self, id: u64) -> Option<&Document> {
+        self.entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| &entry.document)
+    }
+
+    /// Dialog completions belong to the initiating buffer, even after a tab switch.
+    pub fn save_id(&mut self, id: u64, target: Option<&Path>) -> Result<()> {
+        let previous = self.active_id();
+        self.select(id)?;
+        let result = self.save(target, false);
+        self.select(previous)?;
+        result
+    }
+
     pub fn next(&mut self) {
         self.active = (self.active + 1) % self.entries.len();
     }

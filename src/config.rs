@@ -118,6 +118,12 @@ impl Default for Config {
             theme: Theme::default(),
             markdown: MarkdownStyle::default(),
             keys: BTreeMap::from([
+                ("cmd-n".into(), "new".into()),
+                ("ctrl-n".into(), "new".into()),
+                ("cmd-o".into(), "open".into()),
+                ("ctrl-o".into(), "open".into()),
+                ("cmd-shift-s".into(), "save-as".into()),
+                ("ctrl-shift-s".into(), "save-as".into()),
                 ("cmd-s".into(), "save".into()),
                 ("ctrl-s".into(), "save".into()),
                 ("cmd-v".into(), "paste".into()),
@@ -227,6 +233,9 @@ impl Config {
             gpui::Keystroke::parse(key).with_context(|| format!("Invalid shortcut {key}"))?;
             if ![
                 "save",
+                "new",
+                "open",
+                "save-as",
                 "paste",
                 "explorer",
                 "terminal",
