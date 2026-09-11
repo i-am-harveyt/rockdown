@@ -75,6 +75,8 @@ pub struct Workspace {
     pub explorer: Explorer,
     pub explorer_visible: bool,
     explorer_resize: Option<(Pixels, f32)>,
+    mouse_anchor: Option<(Pane, usize, usize)>,
+    preferred_visual_x: Option<Pixels>,
     pub terminal: Option<Terminal>,
     pub terminal_visible: bool,
     terminal_task: Option<Task<()>>,
@@ -120,6 +122,8 @@ impl Workspace {
             explorer,
             explorer_visible: true,
             explorer_resize: None,
+            mouse_anchor: None,
+            preferred_visual_x: None,
             terminal: None,
             terminal_visible: false,
             terminal_task: None,
@@ -698,6 +702,42 @@ impl Workspace {
             return Ok(true);
         }
         let insert = self.buffer().mode == Mode::Insert;
+        if insert
+            && !stroke.modifiers.control
+            && !stroke.modifiers.alt
+            && !stroke.modifiers.platform
+            && matches!(key, "up" | "down")
+        {
+            let buffer = self.buffer();
+            if let Some(row) = self.layouts[self.pane.index()]
+                .rows
+                .iter()
+                .find(|row| row.source_row == buffer.row && row.wrapped.is_some())
+            {
+                let position = row.position_for_index(buffer.col);
+                let x = self.preferred_visual_x.unwrap_or(position.x - row.origin.x);
+                let target = point(
+                    row.origin.x + x,
+                    position.y + row.line_height * if key == "up" { -0.5 } else { 1.5 },
+                );
+                if target.y >= row.origin.y && target.y < row.origin.y + row.height {
+                    let col = row.index_for_position(target);
+                    let buffer = self.buffer_mut();
+                    buffer.col = buffer.lines[buffer.row]
+                        .text
+                        .grapheme_indices(true)
+                        .map(|(i, _)| i)
+                        .chain(std::iter::once(buffer.lines[buffer.row].text.len()))
+                        .take_while(|i| *i <= col)
+                        .last()
+                        .unwrap_or(0);
+                    self.preferred_visual_x = Some(x);
+                    self.marked = None;
+                    return Ok(true);
+                }
+            }
+        }
+        self.preferred_visual_x = None;
         if !insert && !stroke.modifiers.control && !stroke.modifiers.platform {
             if key == ":" || key == "/" {
                 self.command = Some(key.into());
@@ -778,6 +818,7 @@ impl Workspace {
         Ok(true)
     }
     fn type_text(&mut self, text: &str) {
+        self.preferred_visual_x = None;
         if let Some(command) = &mut self.command {
             command.push_str(&text.replace(['\r', '\n'], ""));
         } else if self.pane == Pane::Terminal {
@@ -799,6 +840,43 @@ impl Workspace {
         }
         self.follow_cursor = true;
     }
+    fn mouse_location(&self, pane: Pane, position: Point<Pixels>) -> Option<(usize, usize)> {
+        let row = self.layouts[pane.index()]
+            .rows
+            .iter()
+            .find(|row| position.y >= row.origin.y && position.y < row.origin.y + row.height)?;
+        let index = row.index_for_position(position);
+        Some((
+            row.source_row,
+            if row.raw {
+                index
+            } else {
+                self.projection
+                    .get(row.source_row)
+                    .map_or(0, |projection| projection.source_column(index))
+            },
+        ))
+    }
+
+    fn mouse_move(&mut self, pane: Pane, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.mouse_anchor = None;
+            return;
+        }
+        let Some((anchor_pane, row, col)) = self.mouse_anchor else {
+            return;
+        };
+        if anchor_pane != pane {
+            return;
+        }
+        if let Some(head) = self.mouse_location(pane, event.position)
+            && (head != (row, col) || self.buffer().mode == Mode::Visual)
+        {
+            self.buffer_mut().select_with_mouse((row, col), head);
+            cx.notify();
+        }
+    }
+
     pub fn mouse_down(
         &mut self,
         pane: Pane,
@@ -806,35 +884,32 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let hit = self.layouts[pane.index()].rows.iter().find(|row| {
-            event.position.y >= row.origin.y && event.position.y < row.origin.y + row.height
-        });
-        let location = hit.map(|row| {
-            (
-                row.source_row,
-                if row.raw {
-                    row.line
-                        .closest_index_for_x(event.position.x - row.origin.x)
-                } else {
-                    0
-                },
-            )
-        });
+        let location = self.mouse_location(pane, event.position);
+        self.mouse_anchor = None;
+        self.preferred_visual_x = None;
         self.set_pane(pane, cx);
         self.focus.focus(window);
         if pane != Pane::Terminal
             && let Some((row, col)) = location
         {
-            self.buffer_mut().key("escape");
+            if self.buffer().mode != Mode::Insert {
+                self.buffer_mut().key("escape");
+            }
             let buffer = self.buffer_mut();
             buffer.row = row.min(buffer.lines.len() - 1);
             let text = &buffer.lines[buffer.row].text;
             buffer.col = text
                 .grapheme_indices(true)
                 .map(|(i, _)| i)
+                .chain((buffer.mode == Mode::Insert).then_some(text.len()))
                 .take_while(|i| *i <= col)
                 .last()
                 .unwrap_or(0);
+            if event.click_count == 2 {
+                buffer.select_word_with_mouse();
+            } else {
+                self.mouse_anchor = Some((pane, buffer.row, buffer.col));
+            }
         }
         cx.notify();
     }
@@ -903,10 +978,10 @@ impl Workspace {
         }
         if self.follow_cursor && pane == self.pane && pane != Pane::Terminal {
             let row = self.buffer().row;
-            self.scroll_offsets[pane.index()] = 0.;
             let top = &mut self.tops[pane.index()];
             if row < *top {
                 *top = row;
+                self.scroll_offsets[pane.index()] = 0.;
             } else if row >= *top + rows {
                 *top = row.saturating_sub(rows.saturating_sub(1));
             }
@@ -1135,6 +1210,15 @@ impl Workspace {
                 cx.listener(move |this, event, window, cx| {
                     this.mouse_down(pane, event, window, cx)
                 }),
+            )
+            .on_mouse_move(cx.listener(move |this, event, _, cx| this.mouse_move(pane, event, cx)))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.mouse_anchor = None),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.mouse_anchor = None),
             )
             .on_scroll_wheel(cx.listener(move |this, event, _, cx| this.scroll(pane, event, cx)))
             .child(Surface {
@@ -1480,7 +1564,7 @@ impl EntityInputHandler for Workspace {
         let start = utf8_offset(self.input_text(), range.start);
         Some(
             Bounds::new(
-                point(row.origin.x + row.line.x_for_index(start), row.origin.y),
+                row.position_for_index(start),
                 size(px(2.), px(self.config.line_height)),
             )
             .intersect(&bounds),
@@ -1498,7 +1582,7 @@ impl EntityInputHandler for Workspace {
             .find(|r| r.source_row == self.buffer().row)?;
         Some(utf16_offset(
             self.input_text(),
-            row.line.closest_index_for_x(position.x - row.origin.x),
+            row.index_for_position(position),
         ))
     }
 }

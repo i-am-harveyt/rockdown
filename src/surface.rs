@@ -118,7 +118,46 @@ pub struct HitRow {
     pub origin: Point<Pixels>,
     pub line: ShapedLine,
     pub raw: bool,
+    pub wrapped: Option<WrappedLine>,
+    pub line_height: Pixels,
     pub height: Pixels,
+}
+impl HitRow {
+    fn starts(&self) -> Vec<usize> {
+        std::iter::once(0)
+            .chain(self.wrapped.iter().flat_map(|line| {
+                line.wrap_boundaries.iter().map(|boundary| {
+                    line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index
+                })
+            }))
+            .collect()
+    }
+
+    pub fn position_for_index(&self, index: usize) -> Point<Pixels> {
+        let starts = self.starts();
+        let visual_row = starts
+            .partition_point(|start| *start <= index)
+            .saturating_sub(1);
+        self.origin
+            + point(
+                self.line.x_for_index(index) - self.line.x_for_index(starts[visual_row]),
+                self.line_height * visual_row as f32,
+            )
+    }
+
+    pub fn index_for_position(&self, position: Point<Pixels>) -> usize {
+        if let Some(line) = &self.wrapped {
+            let mut local = position - self.origin;
+            local.y = local
+                .y
+                .max(px(0.))
+                .min(self.line_height * (line.wrap_boundaries.len() as f32 + 0.99));
+            line.closest_index_for_position(local, self.line_height)
+                .unwrap_or_else(|index| index)
+        } else {
+            self.line.closest_index_for_x(position.x - self.origin.x)
+        }
+    }
 }
 struct DrawText {
     line: ShapedLine,
@@ -537,7 +576,13 @@ impl Element for Surface {
                 let line = window
                     .text_system()
                     .shape_line(text.into(), px(font_size), &runs, None);
-                let wrapped = if !raw && line.width > available {
+                let wrap = !raw
+                    || (self.pane == Pane::Editor
+                        && app
+                            .projection
+                            .get(source_row)
+                            .is_some_and(|row| row.table.is_none() && row.kind != BlockKind::Code));
+                let wrapped = if wrap && line.width > available {
                     window
                         .text_system()
                         .shape_text(
@@ -574,20 +619,26 @@ impl Element for Surface {
                     row_height += divider_thickness + px(4.);
                 }
                 let caret = line.x_for_index(buffer.col.min(line.text.len()));
-                let shift = if active && caret > available {
+                let shift = if active && !wrap && caret > available {
                     caret - available
                 } else {
                     px(0.)
                 };
                 let origin = point(bounds.left() + px(gutter) - shift, y);
+                let hit = HitRow {
+                    source_row,
+                    origin,
+                    line: line.clone(),
+                    raw,
+                    wrapped: wrapped.clone(),
+                    line_height: px(text_line_height),
+                    height: row_height,
+                };
                 if active {
                     let mut highlight = accent;
                     highlight.a = 0.055;
                     result.quads.push(fill(
-                        Bounds::new(
-                            point(bounds.left(), y),
-                            size(bounds.size.width, px(line_height)),
-                        ),
+                        Bounds::new(point(bounds.left(), y), size(bounds.size.width, row_height)),
                         highlight,
                     ));
                     let mut cursor_color = accent;
@@ -599,7 +650,7 @@ impl Element for Surface {
                     };
                     result.cursor = Some(fill(
                         Bounds::new(
-                            point(origin.x + caret, y + px(3.)),
+                            hit.position_for_index(buffer.col) + point(px(0.), px(3.)),
                             size(width, px(line_height - 6.)),
                         ),
                         cursor_color,
@@ -608,15 +659,26 @@ impl Element for Surface {
                 if let Some(range) = buffer.selected_range(source_row) {
                     let mut color = accent;
                     color.a = 0.25;
-                    let left = line.x_for_index(range.start);
-                    let right = line.x_for_index(range.end);
-                    result.quads.push(fill(
-                        Bounds::new(
-                            point(origin.x + left, y),
-                            size((right - left).max(px(4.)), px(line_height)),
-                        ),
-                        color,
-                    ));
+                    let starts = hit.starts();
+                    for (visual_row, start) in starts.iter().copied().enumerate() {
+                        let end = starts
+                            .get(visual_row + 1)
+                            .copied()
+                            .unwrap_or(line.text.len());
+                        let first = range.start.max(start);
+                        let last = range.end.min(end);
+                        if first < last {
+                            let left = line.x_for_index(first) - line.x_for_index(start);
+                            let right = line.x_for_index(last) - line.x_for_index(start);
+                            result.quads.push(fill(
+                                Bounds::new(
+                                    origin + point(left, px(text_line_height) * visual_row as f32),
+                                    size((right - left).max(px(4.)), px(text_line_height)),
+                                ),
+                                color,
+                            ));
+                        }
+                    }
                 }
                 if self.pane == Pane::Editor {
                     let number = format!("{:>4}", source_row + 1);
@@ -672,11 +734,8 @@ impl Element for Surface {
                     }
                 }
                 result.layout.rows.push(HitRow {
-                    source_row,
-                    origin,
-                    line: line.clone(),
-                    raw,
                     height: row_height,
+                    ..hit
                 });
                 result.text.push(DrawText {
                     line,
@@ -687,6 +746,26 @@ impl Element for Surface {
                     align: TextAlign::Left,
                 });
                 y += row_height;
+            }
+            if app.follow_cursor
+                && app.pane == self.pane
+                && !app.viewport_is_aligned(self.pane)
+                && let Some(cursor) = &result.cursor
+            {
+                let delta = if cursor.bounds.bottom() > bounds.bottom() {
+                    cursor.bounds.bottom() - bounds.bottom()
+                } else if cursor.bounds.top() < bounds.top() {
+                    cursor.bounds.top() - bounds.top()
+                } else {
+                    px(0.)
+                };
+                if delta.abs() > px(0.5) {
+                    self.workspace.update(cx, |app, _| {
+                        let offset = &mut app.scroll_offsets[self.pane.index()];
+                        *offset = (*offset + f32::from(delta)).max(0.);
+                    });
+                    continue;
+                }
             }
             let hidden_cursor = app.follow_cursor
                 && app.pane == self.pane
@@ -924,6 +1003,8 @@ impl Surface {
                 .text_system()
                 .shape_line("".into(), style.font_size, &[], None),
             raw: false,
+            wrapped: None,
+            line_height: px(line_height),
             height,
         });
         height
