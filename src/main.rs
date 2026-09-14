@@ -80,7 +80,7 @@ fn run() -> Result<()> {
                 titlebar: Some(TitlebarOptions {
                     title: Some("Rockdown".into()),
                     appears_transparent: cfg!(target_os = "macos"),
-                    traffic_light_position: Some(point(px(12.), px(9.))),
+                    traffic_light_position: Some(point(px(14.), px(13.))),
                 }),
                 ..Default::default()
             },

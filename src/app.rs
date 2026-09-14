@@ -1394,12 +1394,16 @@ impl Workspace {
         let background = self.color(&self.config.theme.background);
         div()
             .id("buffer-tabs")
-            .h(px(38.))
+            .h(px(48.))
             .flex_shrink_0()
             .flex()
             .items_center()
+            .px_3()
+            .gap_2()
             .overflow_x_scroll()
             .bg(panel)
+            .border_b_1()
+            .border_color(muted.opacity(0.12))
             .text_xs()
             .children(self.documents.entries().iter().map(|entry| {
                 let id = entry.id;
@@ -1436,7 +1440,8 @@ impl Workspace {
                         })
                         .into()
                     })
-                    .h_full()
+                    .h(px(32.))
+                    .rounded_md()
                     .px_3()
                     .flex()
                     .items_center()
@@ -1444,11 +1449,23 @@ impl Workspace {
                     .flex_shrink_0()
                     .cursor_pointer()
                     .bg(if id == active { background } else { panel })
-                    .hover(|style| style.bg(accent.opacity(0.12)).text_color(accent))
-                    .active(|style| style.bg(accent.opacity(0.22)))
-                    .text_color(if id == active { accent } else { muted })
-                    .border_b_2()
-                    .border_color(if id == active { accent } else { panel })
+                    .hover(|style| {
+                        style
+                            .bg(muted.opacity(0.08))
+                            .text_color(self.color(&self.config.theme.foreground))
+                    })
+                    .active(|style| style.bg(accent.opacity(0.12)))
+                    .text_color(if id == active {
+                        self.color(&self.config.theme.foreground)
+                    } else {
+                        muted
+                    })
+                    .border_1()
+                    .border_color(if id == active {
+                        muted.opacity(0.18)
+                    } else {
+                        transparent_black()
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if let Err(error) =
                             this.change_document(|documents| documents.select(id), cx)
@@ -1495,7 +1512,7 @@ impl Workspace {
         div()
             .id(action)
             .w(px(30.))
-            .h(px(28.))
+            .h(px(26.))
             .flex()
             .items_center()
             .justify_center()
@@ -1649,71 +1666,285 @@ impl Render for Workspace {
             .unwrap_or_else(|| "Untitled".into());
         let window_title = format!("Rockdown — {buffer_name}");
         window.set_window_title(&window_title);
-        div().size_full().flex().flex_col().bg(background).text_color(foreground).font_family(self.config.font_family.clone()).text_size(px(self.config.font_size))
-            .track_focus(&self.focus).on_key_down(cx.listener(Self::key_down))
-            .on_action(cx.listener(|this, _: &Save, window, cx| this.run_action("save", window, cx)))
-            .on_action(cx.listener(|this, _: &NewDocument, window, cx| this.run_action("new", window, cx)))
-            .on_action(cx.listener(|this, _: &OpenDocument, window, cx| this.run_action("open", window, cx)))
-            .on_action(cx.listener(|this, _: &SaveAs, window, cx| this.run_action("save-as", window, cx)))
-            .on_action(cx.listener(|this, _: &Paste, window, cx| this.run_action("paste", window, cx)))
-            .on_action(cx.listener(|this, _: &ExplorerToggle, window, cx| this.run_action("explorer", window, cx)))
-            .on_action(cx.listener(|this, _: &TerminalToggle, window, cx| this.run_action("terminal", window, cx)))
-            .on_action(cx.listener(|this, _: &EditorPane, window, cx| this.run_action("editor", window, cx)))
-            .on_action(cx.listener(|this, _: &HelpToggle, window, cx| this.run_action("help", window, cx)))
-            .on_action(cx.listener(|this, _: &PreviousBuffer, window, cx| this.run_action("previous-buffer", window, cx)))
-            .on_action(cx.listener(|this, _: &NextBuffer, window, cx| this.run_action("next-buffer", window, cx)))
-            .on_action(cx.listener(|this, _: &BufferDelete, window, cx| this.run_action("buffer-delete", window, cx)))
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(background)
+            .text_color(foreground)
+            .font_family(".SystemUIFont")
+            .text_size(px(13.))
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::key_down))
+            .on_action(
+                cx.listener(|this, _: &Save, window, cx| this.run_action("save", window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &NewDocument, window, cx| this.run_action("new", window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &OpenDocument, window, cx| {
+                    this.run_action("open", window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &SaveAs, window, cx| this.run_action("save-as", window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Paste, window, cx| this.run_action("paste", window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ExplorerToggle, window, cx| {
+                this.run_action("explorer", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &TerminalToggle, window, cx| {
+                this.run_action("terminal", window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &EditorPane, window, cx| {
+                    this.run_action("editor", window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &HelpToggle, window, cx| this.run_action("help", window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &PreviousBuffer, window, cx| {
+                this.run_action("previous-buffer", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NextBuffer, window, cx| {
+                this.run_action("next-buffer", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &BufferDelete, window, cx| {
+                this.run_action("buffer-delete", window, cx)
+            }))
             .on_mouse_move(cx.listener(Self::resize_explorer))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.stop_explorer_resize(cx)))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| this.stop_explorer_resize(cx)))
-            .when(self.explorer_resize.is_some(), |root| root.cursor(CursorStyle::ResizeLeftRight))
-            .when(cfg!(target_os = "macos"), |root| root.child(
-                div().id("window-title").h(px(32.)).flex_shrink_0()
-                    .px(px(80.)).flex().items_center().justify_center()
-                    .bg(panel).text_size(px(12.)).text_color(muted)
-                    .window_control_area(WindowControlArea::Drag)
-                    .on_mouse_down(MouseButton::Left, |event, window, _| {
-                        if event.click_count == 2 {
-                            window.zoom_window();
-                        } else {
-                            window.start_window_move();
-                        }
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.stop_explorer_resize(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.stop_explorer_resize(cx)),
+            )
+            .when(self.explorer_resize.is_some(), |root| {
+                root.cursor(CursorStyle::ResizeLeftRight)
+            })
+            .when(cfg!(target_os = "macos"), |root| {
+                root.child(
+                    div()
+                        .id("window-title")
+                        .h(px(40.))
+                        .flex_shrink_0()
+                        .px(px(80.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(panel)
+                        .text_size(px(12.))
+                        .text_color(muted)
+                        .window_control_area(WindowControlArea::Drag)
+                        .on_mouse_down(MouseButton::Left, |event, window, _| {
+                            if event.click_count == 2 {
+                                window.zoom_window();
+                            } else {
+                                window.start_window_move();
+                            }
+                        })
+                        .child(div().overflow_hidden().text_ellipsis().child(window_title)),
+                )
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(self.buffer_bar(cx))
+                            .child(
+                                div().flex_1().min_h_0().flex().justify_center().child(
+                                    div()
+                                        .w_full()
+                                        .min_w_0()
+                                        .h_full()
+                                        .when(self.documents.current().is_markdown(), |column| {
+                                            column.max_w(px(self.config.writing_width)).py_6()
+                                        })
+                                        .child(self.surface(Pane::Editor, cx)),
+                                ),
+                            ),
+                    )
+                    .when(self.explorer_visible, |body| {
+                        body.child(
+                            div()
+                                .w(px(explorer_width))
+                                .flex_shrink_0()
+                                .flex()
+                                .bg(panel)
+                                .child(
+                                    div()
+                                        .id("explorer-splitter")
+                                        .w(px(6.))
+                                        .flex_shrink_0()
+                                        .h_full()
+                                        .cursor(CursorStyle::ResizeLeftRight)
+                                        .child(div().w(px(1.)).h_full().bg(
+                                            if self.pane == Pane::Explorer {
+                                                accent.opacity(0.5)
+                                            } else {
+                                                muted.opacity(0.16)
+                                            },
+                                        ))
+                                        .hover(|style| style.bg(accent.opacity(0.15)))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(Self::start_explorer_resize),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .h(px(48.))
+                                                .flex_shrink_0()
+                                                .px_4()
+                                                .flex()
+                                                .items_center()
+                                                .text_size(px(12.))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(foreground)
+                                                .child(if self.explorer.dirty() {
+                                                    "Files  •"
+                                                } else {
+                                                    "Files"
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_4()
+                                                .pb_3()
+                                                .text_size(px(11.))
+                                                .text_color(muted)
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .child(
+                                                    self.explorer.directory.display().to_string(),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_h_0()
+                                                .child(self.surface(Pane::Explorer, cx)),
+                                        ),
+                                ),
+                        )
+                    }),
+            )
+            .when(self.terminal_visible, |root| {
+                root.child(
+                    div()
+                        .h(px(self.config.terminal_height))
+                        .flex_shrink_0()
+                        .flex()
+                        .flex_col()
+                        .border_t_1()
+                        .border_color(muted.opacity(0.18))
+                        .bg(background)
+                        .child(
+                            div()
+                                .h(px(36.))
+                                .flex_shrink_0()
+                                .px_4()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(11.))
+                                .text_color(muted)
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(foreground)
+                                        .child("Terminal"),
+                                )
+                                .child("Ctrl-` to hide"),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .child(self.surface(Pane::Terminal, cx)),
+                        ),
+                )
+            })
+            .child(
+                div()
+                    .h(px(38.))
+                    .flex_shrink_0()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .bg(panel)
+                    .border_t_1()
+                    .border_color(muted.opacity(0.12))
+                    .text_size(px(11.))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(accent.opacity(0.1))
+                            .text_color(accent)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(mode),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_color(if self.command.is_some() {
+                                foreground
+                            } else {
+                                muted
+                            })
+                            .child(status),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(muted)
+                            .font_family(self.config.font_family.clone())
+                            .child(location),
+                    )
+                    .when(self.terminal_visible, |footer| {
+                        footer.child(self.dock_button("Hide Terminal", "terminal", true, cx))
                     })
-                    .child(div().overflow_hidden().text_ellipsis().child(window_title))
-            ))
-            .child(div().flex_1().min_h_0().flex()
-                .child(div().flex_1().min_w_0().flex().flex_col()
-                    .child(self.buffer_bar(cx))
-                    .child(div().flex_1().min_h_0().flex().justify_center()
-                        .child(div().w_full().min_w_0().h_full()
-                            .when(self.documents.current().is_markdown(), |column| column.max_w(px(self.config.writing_width)).py_4())
-                            .child(self.surface(Pane::Editor,cx)))))
-                .when(self.explorer_visible, |body| body.child(div().w(px(explorer_width)).flex_shrink_0().flex().bg(panel)
-                    .child(div().id("explorer-splitter").w(px(6.)).flex_shrink_0().h_full().cursor(CursorStyle::ResizeLeftRight)
-                        .bg(if self.pane==Pane::Explorer {accent} else {background})
-                        .hover(|style| style.bg(accent))
-                        .on_mouse_down(MouseButton::Left, cx.listener(Self::start_explorer_resize)))
-                    .child(div().flex_1().min_w_0().flex().flex_col()
-                        .child(div().h(px(38.)).flex_shrink_0().px_3().flex().items_center().text_xs().text_color(muted).child(if self.explorer.dirty() { "Files  •" } else { "Files" }))
-                        .child(div().px_3().pb_2().text_xs().text_color(muted).overflow_hidden().child(self.explorer.directory.display().to_string()))
-                        .child(div().flex_1().min_h_0().child(self.surface(Pane::Explorer,cx)))))))
-            .when(self.terminal_visible, |root| root.child(div().h(px(self.config.terminal_height)).flex_shrink_0().flex().flex_col().border_t_1().border_color(accent).bg(background)
-                .child(div().h(px(28.)).flex_shrink_0().px_4().text_sm().text_color(muted).child("TERMINAL · Ctrl-` hide · Ctrl-W h/l change focus"))
-                .child(div().flex_1().min_h_0().child(self.surface(Pane::Terminal,cx)))))
-            .when(self.help, |root| root.child(div().id("help-sheet").absolute().inset_0().m_8().p_6().bg(panel).border_1().border_color(accent).rounded_lg().overflow_y_scroll().flex().flex_col().gap_2()
-                .child(div().text_xl().text_color(accent).child("Rockdown · keyboard guide"))
+                    .child(self.dock_button(explorer_label, "explorer", self.explorer_visible, cx))
+                    .child(self.dock_button(
+                        if self.help { "Hide Help" } else { "Show Help" },
+                        "help",
+                        self.help,
+                        cx,
+                    )),
+            )
+            .when(self.help, |root| root.child(div().id("help-sheet").absolute().inset_0().m_8().p_6().bg(panel).border_1().border_color(muted.opacity(0.24)).rounded_xl().shadow_lg().overflow_y_scroll().flex().flex_col().gap_2()
+                .child(div().mb_3().text_xl().font_weight(FontWeight::SEMIBOLD).text_color(foreground).child("Keyboard guide"))
                 .child(div().flex_shrink_0().text_sm().child("Editor and Files share the system clipboard: y copies, p/P paste. Deletes and changes also copy their removed text."))
                 .child(div().flex_shrink_0().text_sm().child("Ctrl-D / Ctrl-U: half-page down / up. zz: center current line. zt: current line at top."))
                 .child(div().flex_shrink_0().text_sm().child(r":%s/pattern/replacement/[giI]: whole-buffer substitution. Rust regex; & = match, \1 = capture. u undoes all replacements."))
                 .children(HELP.lines().map(|line| div().flex_shrink_0().text_sm().child(line.to_string())))
                 .child(div().flex_shrink_0().text_sm().child("Prose wraps. Local images render inline; remote images stay linked alt text (no network requests)."))))
-            .child(div().h(px(34.)).flex_shrink_0().px_2().flex().items_center().gap_3().bg(panel).text_xs()
-                .child(div().flex_shrink_0().text_color(accent).font_weight(FontWeight::BOLD).child(mode))
-                .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().child(status))
-                .child(div().flex_shrink_0().text_color(muted).child(location))
-                .when(self.terminal_visible, |footer| footer.child(self.dock_button("Hide Terminal", "terminal", true, cx)))
-                .child(self.dock_button(explorer_label, "explorer", self.explorer_visible, cx))
-                .child(self.dock_button(if self.help { "Hide Help" } else { "Show Help" }, "help", self.help, cx)))
     }
 }
 

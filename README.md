@@ -4,7 +4,7 @@ A lightweight, native Markdown editor built with **Rust and GPUI**. Write in pla
 
 ## What it does
 
-- **Focused writing layout:** a centered Markdown column, optional line numbers, and compact document tabs with full paths on hover. Opening a named file starts with Files hidden; opening a directory keeps Files visible.
+- **Focused writing layout:** a centered Markdown column with generous vertical spacing, optional line numbers, and softly outlined document tabs with full paths on hover. Native UI typography separates the window controls, file-drawer headings, and status bar from the configurable editor font. Subtle theme-derived dividers and a tinted Vim-mode badge keep the chrome quiet. Opening a named file starts with Files hidden; opening a directory keeps Files visible.
 - **Live-preview Markdown:** headings, emphasis, code, lists, task lists, tables, quotes, wrapped prose, and local images.
 - **Vim-style editing:** Normal, Insert, and Visual modes; motions, counts, operators, search, and undo/redo.
 - **Multiple buffers:** switch between documents without losing unsaved text, cursor position, viewport, or undo history.
