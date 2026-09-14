@@ -102,7 +102,7 @@ rockdown [FILE|DIRECTORY] [--config PATH] [--check-config]
 5. Press `Ctrl-W`, then `l`, to focus the file explorer. Select a file with `j` or `k` and press Return to open it.
 6. Use the buffer tabs or `Ctrl-PageUp` / `Ctrl-PageDown` to switch documents.
 
-Press **F1** or enter `:help` for the in-app keyboard guide. Press `Esc` to dismiss it.
+Press **F1** or enter `:help` for the in-app reference. Browse Editing, Navigation, Documents, Markdown, Files & terminal, and Appearance with the topic tabs or **Left/Right/Tab**. Shortcut rows and notes scroll independently beneath a fixed header. Press **Esc**, click **×**, or click outside to dismiss; the document remains protected from edits while the guide is open.
 
 ## Focus and global shortcuts
 
