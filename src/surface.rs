@@ -1218,7 +1218,7 @@ mod tests {
                     if source_row == 2 {
                         assert!(row.height > row.line_height);
                     }
-                    for visual_row in 0..(f32::from(row.height / row.line_height) as usize) {
+                    for visual_row in 0..((row.height / row.line_height) as usize) {
                         let sample = row.origin
                             + point(px(1.), row.line_height * (visual_row as f32 + 0.5));
                         assert!(
