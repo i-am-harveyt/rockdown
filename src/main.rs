@@ -1,7 +1,10 @@
 use anyhow::{Context, Result, bail};
 use gpui::{prelude::*, *};
-use rockdown::{config::Config, document::Document, explorer::Explorer};
-use std::path::PathBuf;
+use rockdown::{config::Config, document::Document, documents::Documents, explorer::Explorer};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
 
 fn main() {
     if let Err(error) = run() {
@@ -9,36 +12,88 @@ fn main() {
         std::process::exit(1);
     }
 }
-fn run() -> Result<()> {
-    let mut path = None;
-    let mut config_path = None;
-    let mut check = false;
-    let mut args = std::env::args_os().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.to_str() {
-            Some("--help" | "-h") => {
-                println!(
-                    "Rockdown - native Vim-first Markdown workspace\n\nUsage: rockdown [FILE|DIRECTORY] [--config PATH] [--check-config]\n\n--config PATH    Load TOML settings from an explicit file\n--check-config   Validate settings without opening a window\n\nDefault settings: $XDG_CONFIG_HOME/rockdown/config.toml\n(falls back to %APPDATA%\\rockdown\\config.toml on Windows,\nor ~/.config/rockdown/config.toml on Unix).\n\nIn the app: F1 help, Ctrl-E toggle files, Ctrl-` terminal, Ctrl-S save.\nEditor: i insert, Return new line, Esc normal, hjkl motion, :w [file].\nClipboard: Ctrl-C/V in Editor and Files (Cmd-C/V on macOS); Ctrl-Shift-V in all panes.\nBuffers: :bp previous, :bn next, :bd close, :bd! discard and close.\nCtrl-PageUp/PageDown cycle; Cmd-W or Ctrl-Shift-W closes the current buffer.\nExplorer: drag its left edge to resize; edit names, o create, dd trash, :w apply.\n:q closes with Save/Discard/Cancel prompts; :q! discards all.\nSee examples/config.toml for settings."
-                );
-                return Ok(());
-            }
-            Some("--config") => {
-                config_path = Some(PathBuf::from(
-                    args.next().context("--config requires a path")?,
-                ))
-            }
-            Some("--check-config") => check = true,
-            Some(flag) if flag.starts_with('-') => bail!("Unknown argument: {flag}"),
-            _ => {
-                if path.is_some() {
-                    bail!("Expected one file or directory");
+
+#[derive(Debug, Default)]
+struct Cli {
+    paths: Vec<PathBuf>,
+    config_path: Option<PathBuf>,
+    check: bool,
+    help: bool,
+}
+
+impl Cli {
+    fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self> {
+        let mut cli = Self::default();
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
+            match arg.to_str() {
+                Some("--help" | "-h") => {
+                    cli.help = true;
+                    return Ok(cli);
                 }
-                path = Some(PathBuf::from(arg));
+                Some("--config") => {
+                    cli.config_path = Some(PathBuf::from(
+                        args.next().context("--config requires a path")?,
+                    ));
+                }
+                Some("--check-config") => cli.check = true,
+                Some("--") => {
+                    cli.paths.extend(args.map(PathBuf::from));
+                    break;
+                }
+                Some(flag) if flag.starts_with('-') => bail!("Unknown argument: {flag}"),
+                _ => cli.paths.push(PathBuf::from(arg)),
             }
         }
+        Ok(cli)
     }
-    let (config, config_path) = Config::load(config_path.as_deref())?;
-    if check {
+
+    fn prepare(&self, cwd: &Path) -> Result<(Documents, Explorer)> {
+        let mut documents = Documents::new(Document::untitled(""));
+        if self.paths.is_empty() {
+            return Ok((documents, Explorer::open(cwd)?));
+        }
+        let scratch = documents.active_id();
+        for path in &self.paths {
+            if path.as_os_str().is_empty() {
+                bail!("File path must not be empty");
+            }
+            let path = cwd.join(path);
+            if path.is_dir() {
+                if self.paths.len() == 1 {
+                    return Ok((documents, Explorer::open(&path)?));
+                }
+                bail!(
+                    "Directories must be opened alone, not alongside files: {}",
+                    path.display()
+                );
+            }
+            documents.open(&path)?;
+        }
+        // Drop the initial scratch buffer; deleting index zero activates the first file.
+        documents.select(scratch)?;
+        documents.delete(true)?;
+        let directory = documents
+            .current()
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .context("Opened file has no parent directory")?;
+        let explorer = Explorer::open(directory)?;
+        Ok((documents, explorer))
+    }
+}
+
+fn run() -> Result<()> {
+    let cli = Cli::parse(std::env::args_os().skip(1))?;
+    if cli.help {
+        println!(
+            "Rockdown - native Vim-first Markdown workspace\n\nUsage: rockdown [FILE ... | DIRECTORY] [--config PATH] [--check-config]\n\nOpen files in order with the first active. Missing files start as named empty buffers.\nA directory must be the only path; no paths opens the current directory.\nUse -- before filenames beginning with a dash.\n\n--config PATH    Load TOML settings from an explicit file\n--check-config   Validate settings without opening a window\n\nDefault settings: $XDG_CONFIG_HOME/rockdown/config.toml\n(falls back to %APPDATA%\\rockdown\\config.toml on Windows,\nor ~/.config/rockdown/config.toml on Unix).\n\nIn the app: F1 help, Ctrl-E toggle files, Ctrl-` terminal, Ctrl-S save.\nEditor: i insert, Return new line, Esc normal, hjkl motion, :w [file].\nClipboard: Ctrl-C/V in Editor and Files (Cmd-C/V on macOS); Ctrl-Shift-V in all panes.\nBuffers: :bp previous, :bn next, :bd close, :bd! discard and close.\nCtrl-PageUp/PageDown cycle; Cmd-W or Ctrl-Shift-W closes the current buffer.\nExplorer: drag its left edge to resize; edit names, o create, dd trash, :w apply.\n:q closes with Save/Discard/Cancel prompts; :q! discards all.\nSee examples/config.toml for settings."
+        );
+        return Ok(());
+    }
+    let (config, config_path) = Config::load(cli.config_path.as_deref())?;
+    if cli.check {
         println!(
             "Configuration valid: {}",
             config_path
@@ -47,24 +102,7 @@ fn run() -> Result<()> {
         );
         return Ok(());
     }
-    let path = path.unwrap_or(std::env::current_dir()?);
-    let (document, directory) = if path.is_dir() {
-        (Document::untitled(""), std::fs::canonicalize(&path)?)
-    } else if path.exists() {
-        let doc = Document::open(&path)?;
-        let directory = doc.path.as_ref().unwrap().parent().unwrap().to_path_buf();
-        (doc, directory)
-    } else {
-        let parent = std::fs::canonicalize(
-            path.parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or(std::path::Path::new(".")),
-        )?;
-        let mut doc = Document::untitled("");
-        doc.path = Some(parent.join(path.file_name().context("Missing filename")?));
-        (doc, parent)
-    };
-    let explorer = Explorer::open(&directory)?;
+    let (documents, explorer) = cli.prepare(&std::env::current_dir()?)?;
     Application::new().run(move |cx: &mut App| {
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
@@ -86,14 +124,18 @@ fn run() -> Result<()> {
             },
             move |window, cx| {
                 let workspace = cx.new(|cx| {
-                    rockdown::app::Workspace::new(
+                    let mut workspace = rockdown::app::Workspace::new(
                         config,
                         config_path,
-                        document,
+                        Document::untitled(""),
                         explorer,
                         window,
                         cx,
-                    )
+                    );
+                    workspace.explorer_visible = documents.current().path.is_none();
+                    workspace.documents = documents;
+                    workspace.refresh_projection();
+                    workspace
                 });
                 let weak = workspace.downgrade();
                 window.on_window_should_close(cx, move |window, cx| {
@@ -122,4 +164,168 @@ fn run() -> Result<()> {
         cx.activate(true);
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use std::{ffi::OsString, fs, path::PathBuf};
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::parse(args.iter().map(OsString::from)).unwrap()
+    }
+
+    #[test]
+    fn startup_opens_ordered_files_deduplicates_aliases_and_keeps_first_active() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        fs::write(dir.path().join("README.md"), "# Existing\n").unwrap();
+        fs::write(dir.path().join("sub/other.md"), "Other file").unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let cli = parse(&[
+            "README.md",
+            "test.md",
+            "sub/other.md",
+            "./README.md",
+            "sub/../test.md",
+        ]);
+        let (mut documents, explorer) = cli.prepare(dir.path()).unwrap();
+        let paths: Vec<_> = documents
+            .entries()
+            .iter()
+            .map(|entry| entry.document.path.clone().unwrap())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                root.join("README.md"),
+                root.join("test.md"),
+                root.join("sub/other.md")
+            ]
+        );
+        assert_eq!(
+            documents.current().path.as_ref(),
+            Some(&root.join("README.md"))
+        );
+        assert_eq!(documents.current().buffer.text(), "# Existing\n");
+        assert_eq!(explorer.directory, root);
+        assert!(!documents.dirty());
+        documents.next();
+        assert_eq!(
+            documents.current().path.as_ref(),
+            Some(&root.join("test.md"))
+        );
+        assert_eq!(documents.current().buffer.text(), "");
+        assert!(!dir.path().join("test.md").exists());
+        documents.next();
+        assert_eq!(documents.current().buffer.text(), "Other file");
+    }
+
+    #[test]
+    fn startup_loads_existing_second_file_instead_of_empty_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "Read me").unwrap();
+        fs::write(dir.path().join("test.md"), "Already exists").unwrap();
+        let (mut documents, _) = parse(&["README.md", "test.md"])
+            .prepare(dir.path())
+            .unwrap();
+        assert_eq!(documents.current().buffer.text(), "Read me");
+        documents.next();
+        assert_eq!(documents.current().buffer.text(), "Already exists");
+        assert!(!documents.dirty());
+    }
+
+    #[test]
+    fn startup_preserves_current_directory_and_sole_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        for (args, directory) in [(vec![], root.clone()), (vec!["sub"], root.join("sub"))] {
+            let (documents, explorer) = parse(&args).prepare(dir.path()).unwrap();
+            assert_eq!(explorer.directory, directory);
+            assert_eq!(documents.entries().len(), 1);
+            assert!(documents.current().path.is_none());
+            assert_eq!(documents.current().buffer.text(), "");
+            assert!(!documents.dirty());
+        }
+    }
+
+    #[test]
+    fn startup_preserves_single_existing_and_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("existing.md"), "Loaded").unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        for (name, text) in [("existing.md", "Loaded"), ("missing.md", "")] {
+            let (documents, explorer) = parse(&[name]).prepare(dir.path()).unwrap();
+            assert_eq!(documents.entries().len(), 1);
+            assert_eq!(documents.current().path.as_ref(), Some(&root.join(name)));
+            assert_eq!(documents.current().buffer.text(), text);
+            assert_eq!(explorer.directory, root);
+            assert!(!documents.dirty());
+        }
+        assert!(!dir.path().join("missing.md").exists());
+    }
+
+    #[test]
+    fn startup_rejects_directories_among_files_and_invalid_file_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        fs::write(dir.path().join("invalid.md"), [0xff]).unwrap();
+        fs::write(dir.path().join("file.md"), "Text").unwrap();
+        for args in [vec!["sub", "new.md"], vec!["new.md", "sub"]] {
+            assert!(parse(&args).prepare(dir.path()).is_err());
+        }
+        for path in ["absent/new.md", "file.md/new.md", "invalid.md", ""] {
+            assert!(parse(&[path]).prepare(dir.path()).is_err(), "{path:?}");
+        }
+        assert!(!dir.path().join("new.md").exists());
+        assert!(!dir.path().join("absent").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_deduplicates_symlinks_and_rejects_dangling_links_and_nonfiles() {
+        use std::os::unix::{fs::symlink, net::UnixListener};
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("file.md"), "Text").unwrap();
+        symlink("file.md", dir.path().join("alias.md")).unwrap();
+        symlink(".", dir.path().join("alias-dir")).unwrap();
+        let (documents, _) = parse(&["file.md", "alias.md", "new.md", "alias-dir/new.md"])
+            .prepare(dir.path())
+            .unwrap();
+        assert_eq!(documents.entries().len(), 2);
+        assert_eq!(documents.current().buffer.text(), "Text");
+        assert!(!dir.path().join("new.md").exists());
+
+        symlink("missing.md", dir.path().join("dangling.md")).unwrap();
+        assert!(parse(&["dangling.md"]).prepare(dir.path()).is_err());
+        let _socket = UnixListener::bind(dir.path().join("socket")).unwrap();
+        assert!(parse(&["socket"]).prepare(dir.path()).is_err());
+        assert!(!dir.path().join("missing.md").exists());
+    }
+
+    #[test]
+    fn startup_parser_preserves_options_and_supports_option_terminator() {
+        let cli = parse(&[
+            "first.md",
+            "--config",
+            "settings.toml",
+            "second.md",
+            "--check-config",
+        ]);
+        assert_eq!(
+            cli.paths,
+            vec![PathBuf::from("first.md"), PathBuf::from("second.md")]
+        );
+        assert_eq!(cli.config_path, Some(PathBuf::from("settings.toml")));
+        assert!(cli.check);
+        assert!(parse(&["--help"]).help);
+        assert!(parse(&["-h"]).help);
+        assert_eq!(
+            parse(&["--", "-note.md", "--check-config"]).paths,
+            vec![PathBuf::from("-note.md"), PathBuf::from("--check-config")]
+        );
+        assert!(Cli::parse([OsString::from("--config")]).is_err());
+        assert!(Cli::parse([OsString::from("--unknown")]).is_err());
+    }
 }

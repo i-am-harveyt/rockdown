@@ -115,7 +115,31 @@ impl Documents {
     }
 
     pub fn open(&mut self, path: &Path) -> Result<()> {
-        let path = fs::canonicalize(path).with_context(|| format!("Opening {}", path.display()))?;
+        let (path, exists) = (|| -> Result<_> {
+            match fs::canonicalize(path) {
+                Ok(path) => Ok((path, true)),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        && fs::symlink_metadata(path)
+                            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    let parent = fs::canonicalize(
+                        path.parent()
+                            .filter(|parent| !parent.as_os_str().is_empty())
+                            .unwrap_or(Path::new(".")),
+                    )?;
+                    if !parent.is_dir() {
+                        bail!("Parent path is not a directory: {}", parent.display());
+                    }
+                    Ok((
+                        parent.join(path.file_name().context("Missing filename")?),
+                        false,
+                    ))
+                }
+                Err(error) => Err(error.into()),
+            }
+        })()
+        .with_context(|| format!("Opening {}", path.display()))?;
         if let Some(index) = self
             .entries
             .iter()
@@ -124,7 +148,13 @@ impl Documents {
             self.active = index;
             return Ok(());
         }
-        let document = Document::open(&path)?;
+        let document = if exists {
+            Document::open(&path).with_context(|| format!("Opening {}", path.display()))?
+        } else {
+            let mut document = Document::untitled("");
+            document.path = Some(path);
+            document
+        };
         let entry = self.entry(document);
         self.entries.push(entry);
         self.active = self.entries.len() - 1;
@@ -197,6 +227,33 @@ impl Documents {
 mod tests {
     use super::*;
     use crate::vim::Mode;
+    #[test]
+    fn missing_file_alias_reuses_unsaved_buffer_until_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new.md");
+        let mut docs = Documents::new(Document::untitled(""));
+        docs.open(&path).unwrap();
+        let id = docs.active_id();
+        assert_eq!(
+            docs.current().path.as_ref(),
+            Some(&fs::canonicalize(dir.path()).unwrap().join("new.md"))
+        );
+        assert_eq!(docs.current().buffer.text(), "");
+        assert!(!docs.current().buffer.dirty());
+        assert!(!path.exists());
+
+        docs.current_mut().buffer.insert_text("local");
+        docs.previous();
+        docs.open(&dir.path().join(".").join("new.md")).unwrap();
+        assert_eq!(docs.active_id(), id);
+        assert_eq!(docs.entries().len(), 2);
+        assert_eq!(docs.current().buffer.text(), "local");
+        assert!(docs.current().buffer.dirty());
+        assert!(!path.exists());
+        docs.save(None, false).unwrap();
+        assert_eq!(fs::read_to_string(path).unwrap(), "local");
+        assert!(!docs.current().buffer.dirty());
+    }
 
     #[test]
     fn switching_preserves_edits_cursor_mode_viewport_and_independent_undo() {
@@ -335,7 +392,10 @@ mod tests {
         docs.current_mut().buffer.insert_text(" local");
         docs.viewport_mut().offset = 8.0;
         let col = docs.current().buffer.col;
-        assert!(docs.open(&dir.path().join("missing.md")).is_err());
+        assert!(
+            docs.open(&dir.path().join("missing").join("note.md"))
+                .is_err()
+        );
         assert!(docs.open(&invalid).is_err());
         assert!(docs.open(dir.path()).is_err());
         fs::write(&path, "external").unwrap();

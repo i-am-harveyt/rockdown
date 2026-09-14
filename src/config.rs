@@ -23,14 +23,125 @@ pub struct Config {
     pub keys: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemePreset {
+    #[default]
+    Rockdown,
+    Nord,
+    Dracula,
+    Gruvbox,
+    Paper,
+    SolarizedLight,
+}
+
+impl ThemePreset {
+    pub const ALL: &'static [Self] = &[
+        Self::Rockdown,
+        Self::Nord,
+        Self::Dracula,
+        Self::Gruvbox,
+        Self::Paper,
+        Self::SolarizedLight,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Rockdown => "Rockdown",
+            Self::Nord => "Nord",
+            Self::Dracula => "Dracula",
+            Self::Gruvbox => "Gruvbox",
+            Self::Paper => "Paper",
+            Self::SolarizedLight => "Solarized Light",
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Rockdown => "rockdown",
+            Self::Nord => "nord",
+            Self::Dracula => "dracula",
+            Self::Gruvbox => "gruvbox",
+            Self::Paper => "paper",
+            Self::SolarizedLight => "solarized-light",
+        }
+    }
+
+    pub fn theme(self) -> Theme {
+        ThemeOverlay {
+            preset: self,
+            ..ThemeOverlay::default()
+        }
+        .into_theme()
+    }
+
+    fn colors(self) -> [&'static str; 5] {
+        match self {
+            Self::Rockdown => ["#171b22", "#1e242e", "#dce3ec", "#8995a7", "#9cc7b5"],
+            Self::Nord => ["#2e3440", "#3b4252", "#eceff4", "#a3b1c6", "#88c0d0"],
+            Self::Dracula => ["#282a36", "#343746", "#f8f8f2", "#a5acc9", "#bd93f9"],
+            Self::Gruvbox => ["#282828", "#3c3836", "#ebdbb2", "#a89984", "#b8bb26"],
+            Self::Paper => ["#faf9f6", "#eeede9", "#292929", "#6b6b67", "#356d61"],
+            Self::SolarizedLight => ["#fdf6e3", "#eee8d5", "#586e75", "#657b83", "#007d76"],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
+    pub preset: ThemePreset,
     pub background: String,
     pub panel: String,
     pub foreground: String,
     pub muted: String,
     pub accent: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ThemeOverlay {
+    preset: ThemePreset,
+    background: Option<String>,
+    panel: Option<String>,
+    foreground: Option<String>,
+    muted: Option<String>,
+    accent: Option<String>,
+}
+
+impl ThemeOverlay {
+    fn into_theme(self) -> Theme {
+        let [background, panel, foreground, muted, accent] = self.preset.colors();
+        Theme {
+            preset: self.preset,
+            background: self.background.unwrap_or_else(|| background.into()),
+            panel: self.panel.unwrap_or_else(|| panel.into()),
+            foreground: self.foreground.unwrap_or_else(|| foreground.into()),
+            muted: self.muted.unwrap_or_else(|| muted.into()),
+            accent: self.accent.unwrap_or_else(|| accent.into()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Theme {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        ThemeOverlay::deserialize(deserializer).map(ThemeOverlay::into_theme)
+    }
+}
+
+impl Theme {
+    pub fn is_dark(&self) -> bool {
+        let rgb = parse_color(&self.background).expect("validated theme");
+        let linear = |shift: u32| {
+            let channel = ((rgb >> shift) & 0xffu32) as f64 / 255.;
+            if channel <= 0.04045 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        // Relative luminance where black and white have equal contrast.
+        0.2126 * linear(16) + 0.7152 * linear(8) + 0.0722 * linear(0) < 0.179
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -98,13 +209,7 @@ impl Default for DividerStyle {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self {
-            background: "#171b22".into(),
-            panel: "#1e242e".into(),
-            foreground: "#dce3ec".into(),
-            muted: "#8995a7".into(),
-            accent: "#9cc7b5".into(),
-        }
+        ThemePreset::default().theme()
     }
 }
 impl Default for Config {
@@ -136,6 +241,8 @@ impl Default for Config {
                 ("ctrl-shift-v".into(), "paste".into()),
                 ("cmd-e".into(), "explorer".into()),
                 ("ctrl-e".into(), "explorer".into()),
+                ("cmd-shift-t".into(), "themes".into()),
+                ("ctrl-shift-t".into(), "themes".into()),
                 ("ctrl-`".into(), "terminal".into()),
                 ("cmd-1".into(), "editor".into()),
                 ("ctrl-1".into(), "editor".into()),
@@ -246,6 +353,7 @@ impl Config {
                 "paste",
                 "explorer",
                 "terminal",
+                "themes",
                 "editor",
                 "help",
                 "buffer-delete",
@@ -287,6 +395,95 @@ pub fn parse_color(value: &str) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn theme_presets_supply_valid_palettes() {
+        for &preset in ThemePreset::ALL {
+            let config = Config::parse(
+                Path::new("c.toml"),
+                &format!("[theme]\npreset = '{}'", preset.id()),
+            )
+            .unwrap();
+            config.validate().unwrap();
+            assert_eq!(config.theme, preset.theme());
+            assert_eq!(
+                config.theme.is_dark(),
+                !matches!(preset, ThemePreset::Paper | ThemePreset::SolarizedLight)
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_theme_colors_override_presets_in_either_order() {
+        for fields in [
+            "preset = 'nord'\naccent = '#123456'",
+            "accent = '#123456'\npreset = 'nord'",
+        ] {
+            let config = Config::parse(Path::new("c.toml"), &format!("[theme]\n{fields}")).unwrap();
+            assert_eq!(
+                config.theme,
+                Theme {
+                    accent: "#123456".into(),
+                    ..ThemePreset::Nord.theme()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_custom_themes_keep_unspecified_rockdown_colors() {
+        let config = Config::parse(
+            Path::new("c.toml"),
+            "[theme]\nbackground = '#ffffff'\nforeground = '#111111'\nmuted = '#555555'\npanel = '#eeeeee'",
+        )
+        .unwrap();
+        config.validate().unwrap();
+        assert_eq!(
+            config.theme,
+            Theme {
+                background: "#ffffff".into(),
+                foreground: "#111111".into(),
+                muted: "#555555".into(),
+                panel: "#eeeeee".into(),
+                ..Theme::default()
+            }
+        );
+        assert_eq!(
+            Config::parse(Path::new("c.toml"), "").unwrap().theme,
+            Theme::default()
+        );
+    }
+
+    #[test]
+    fn unknown_theme_inputs_are_rejected() {
+        for fields in [
+            "preset = 'unknown'",
+            "preset = 'solarized_light'",
+            "preset = 1",
+            "preset = 'nord'\naccnet = '#123456'",
+            "accnet = '#123456'",
+        ] {
+            assert!(Config::parse(Path::new("c.toml"), &format!("[theme]\n{fields}")).is_err());
+        }
+    }
+
+    #[test]
+    fn syntax_brightness_follows_background_overrides_not_preset() {
+        for (preset, background, dark) in [
+            ("nord", "#ffffff", false),
+            ("paper", "#000000", true),
+            ("dracula", "#00ff00", false),
+            ("solarized-light", "#0000ff", true),
+        ] {
+            let config = Config::parse(
+                Path::new("c.toml"),
+                &format!("[theme]\npreset = '{preset}'\nbackground = '{background}'"),
+            )
+            .unwrap();
+            assert_eq!(config.theme.is_dark(), dark);
+        }
+    }
+
     #[test]
     fn config_location_uses_native_directories_and_honors_xdg() {
         let env = BTreeMap::from([

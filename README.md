@@ -42,6 +42,9 @@ cargo build --release --locked
 # Open a document.
 ./target/release/rockdown /path/to/notes/note.md
 
+# Open several documents; missing files become named buffers.
+./target/release/rockdown README.md test.md
+
 # Use the current directory.
 ./target/release/rockdown
 ```
@@ -52,7 +55,7 @@ You can also build and launch in one command:
 cargo run --release -- /path/to/notes
 ```
 
-Passing a nonexistent filename starts an empty buffer at that path, provided its parent directory exists. The file is created when you save it.
+Passing nonexistent filenames starts empty buffers at those paths, provided their parent directories exist. Files are created only when you save them. Multiple files open in argument order with the first file active; repeated paths reuse the same buffer. A directory must be the only positional path. Use `--` before filenames that begin with a dash.
 
 ### Windows quick start
 
@@ -208,7 +211,7 @@ Enter these commands from Normal mode. Focus the editor first with `Ctrl-W h`; `
 | `:w` | Save the current document. |
 | `:w filename.md` | Save under the given filename. |
 | `:w! [filename.md]` | Explicitly overwrite a disk conflict or existing destination. |
-| `:e filename.md` | Open an existing file, or activate its existing buffer. Other buffers keep their edits. |
+| `:e filename.md` | Open a file, start a named buffer if it does not exist, or activate its existing buffer. Other buffers keep their edits. |
 | `:e` | Reload the current document, refusing unsaved changes. |
 | `:e!` | Discard current edits and reload from disk. |
 | `:q` | Close the window only if all editor buffers and the explorer are clean. |
@@ -296,6 +299,32 @@ Rockdown loads configuration in this order:
 
 An invalid selected config produces an error on startup or reload. Project-local config is not loaded automatically.
 
+### Built-in colorschemes and live preview
+
+Click **Theme** in the footer, press **Ctrl/Cmd-Shift-T**, or run `:theme`.
+Hover a palette or use **↑/↓**, **j/k**, or **Tab** to preview it immediately.
+Click or press **Enter** to keep it; **Esc** or clicking outside cancels and restores
+the exact previous palette. **Current theme** preserves your custom colors.
+
+Available presets: **Rockdown**, **Nord**, **Dracula**, **Gruvbox** (dark),
+**Paper**, and **Solarized Light**. The picker updates workspace colors and
+dark/light fenced-code syntax colors without changing document contents.
+Explicit `markdown` color and typography overrides remain in effect.
+
+Picker choices last for the current session and never rewrite your config.
+For a startup preference, add a preset to your existing `[theme]` table:
+
+```toml
+[theme]
+preset = "nord"
+# accent = "#a3be8c" # Optional override.
+```
+
+Preset IDs are `rockdown`, `nord`, `dracula`, `gruvbox`, `paper`, and
+`solarized-light`. Explicit color fields override the preset, so remove old color
+overrides if you want the complete preset. `:config` restores your configured
+palette. The configurable shortcut action is `themes`.
+
 ### TOML example
 
 ```toml
@@ -326,7 +355,7 @@ A complete example, including the default shortcut map, is provided in [`example
 | `explorer_width` | `290` | Configured range: 180–600; display width also respects window size. |
 | `terminal_height` | `240` | Range: 100–600. |
 | `shell` | Windows: `%COMSPEC%`, then `cmd.exe`; Unix: `$SHELL`, then `/bin/sh` | Shell executable, not a command string with arguments. |
-| `theme` | Colors shown above | Six-digit RGB hex colors, with or without `#`. |
+| `theme` | Rockdown | `preset` selects a built-in palette; optional six-digit RGB colors override individual fields. |
 | `markdown` | Inherited colors and built-in heading sizes | Nested appearance settings described below. |
 | `keys` | Built-in shortcuts | Maps GPUI keystrokes to action names. |
 

@@ -1,6 +1,6 @@
 use crate::surface::{Surface, SurfaceLayout};
 use crate::{
-    config::{Config, parse_color},
+    config::{Config, Theme, ThemePreset, parse_color},
     document::Document,
     explorer::Explorer,
     markdown::{self, RenderedLine},
@@ -28,6 +28,7 @@ actions!(
         TerminalToggle,
         EditorPane,
         HelpToggle,
+        ThemesToggle,
         PreviousBuffer,
         NextBuffer,
         BufferDelete
@@ -49,6 +50,7 @@ pub fn bind_config_keys(config: &Config, cx: &mut App) {
             "terminal" => Box::new(TerminalToggle),
             "editor" => Box::new(EditorPane),
             "help" => Box::new(HelpToggle),
+            "themes" => Box::new(ThemesToggle),
             "previous-buffer" => Box::new(PreviousBuffer),
             "next-buffer" => Box::new(NextBuffer),
             "buffer-delete" => Box::new(BufferDelete),
@@ -76,6 +78,12 @@ impl Pane {
 
 type CloseContinuation = (Option<u64>, Vec<(u64, String)>);
 
+struct ThemePicker {
+    original: Theme,
+    presets: Vec<Theme>,
+    selected: usize,
+}
+
 pub struct Workspace {
     pub config: Config,
     pub config_path: Option<PathBuf>,
@@ -98,6 +106,7 @@ pub struct Workspace {
     pub command: Option<String>,
     pub message: String,
     pub help: bool,
+    theme_picker: Option<ThemePicker>,
     pub marked: Option<Range<usize>>,
     dialog_pending: bool,
     search: String,
@@ -120,7 +129,7 @@ impl Workspace {
         focus.focus(window);
         bind_config_keys(&config, cx);
         let projection = if document.is_markdown() {
-            markdown::project(&document.buffer.text())
+            markdown::project(&document.buffer.text(), config.theme.is_dark())
         } else {
             Vec::new()
         };
@@ -152,6 +161,7 @@ impl Workspace {
             }
             .into(),
             help: false,
+            theme_picker: None,
             marked: None,
             dialog_pending: false,
             search: String::new(),
@@ -181,12 +191,225 @@ impl Workspace {
     pub fn refresh_projection(&mut self) {
         let document = self.documents.current();
         self.projection = if document.is_markdown() {
-            markdown::project(&document.buffer.text())
+            markdown::project(&document.buffer.text(), self.config.theme.is_dark())
         } else {
             Vec::new()
         };
         self.row_heights[Pane::Editor.index()].clear();
     }
+
+    fn open_theme_picker(&mut self, cx: &mut Context<Self>) {
+        self.help = false;
+        self.theme_picker = Some(ThemePicker {
+            original: self.config.theme.clone(),
+            presets: ThemePreset::ALL
+                .iter()
+                .map(|preset| preset.theme())
+                .collect(),
+            selected: 0,
+        });
+        cx.notify();
+    }
+
+    fn preview_theme(&mut self, selected: usize, cx: &mut Context<Self>) {
+        let Some(picker) = &mut self.theme_picker else {
+            return;
+        };
+        if picker.selected == selected {
+            return;
+        }
+        picker.selected = selected;
+        let theme = if selected == 0 {
+            &picker.original
+        } else {
+            &picker.presets[selected - 1]
+        };
+        let reproject = self.config.theme.is_dark() != theme.is_dark();
+        self.config.theme = theme.clone();
+        if reproject {
+            self.refresh_projection();
+        }
+        cx.notify();
+    }
+
+    fn finish_theme_picker(&mut self, keep: bool, cx: &mut Context<Self>) {
+        let Some(picker) = self.theme_picker.take() else {
+            return;
+        };
+        if keep {
+            if picker.selected != 0 {
+                self.message = format!(
+                    "{} theme · this session only",
+                    self.config.theme.preset.name()
+                );
+            }
+        } else {
+            let reproject = self.config.theme.is_dark() != picker.original.is_dark();
+            self.config.theme = picker.original;
+            if reproject {
+                self.refresh_projection();
+            }
+        }
+        cx.notify();
+    }
+
+    fn theme_selector(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let picker = self.theme_picker.as_ref().expect("open theme picker");
+        let panel = self.color(&self.config.theme.panel);
+        let foreground = self.color(&self.config.theme.foreground);
+        let muted = self.color(&self.config.theme.muted);
+        let accent = self.color(&self.config.theme.accent);
+        div()
+            .id("theme-overlay")
+            .absolute()
+            .inset_0()
+            .p_4()
+            .flex()
+            .items_center()
+            .justify_end()
+            .occlude()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.finish_theme_picker(false, cx);
+                cx.stop_propagation();
+            }))
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .id("theme-selector")
+                    .w(px(320.))
+                    .max_h_full()
+                    .debug_selector(|| "theme-selector".into())
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .rounded_xl()
+                    .bg(panel)
+                    .border_1()
+                    .border_color(muted.opacity(0.25))
+                    .shadow_lg()
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .p_4()
+                            .flex_shrink_0()
+                            .child(
+                                div()
+                                    .text_size(px(16.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Appearance"),
+                            )
+                            .child(
+                                div()
+                                    .mt_1()
+                                    .text_size(px(12.))
+                                    .text_color(muted)
+                                    .child("Preview a colorscheme"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("theme-options")
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .px_2()
+                            .pb_2()
+                            .children(
+                                std::iter::once(&picker.original)
+                                    .chain(picker.presets.iter())
+                                    .enumerate()
+                                    .map(|(index, theme)| {
+                                        let selected = picker.selected == index;
+                                        let name = if index == 0 {
+                                            "Current theme"
+                                        } else {
+                                            theme.preset.name()
+                                        };
+                                        let description =
+                                            if theme.is_dark() { "Dark" } else { "Light" };
+                                        div()
+                                            .id(("theme-option", index))
+                                            .h(px(42.))
+                                            .px_3()
+                                            .flex()
+                                            .items_center()
+                                            .gap_3()
+                                            .debug_selector(move || format!("theme-option-{index}"))
+                                            .rounded_md()
+                                            .cursor_pointer()
+                                            .bg(if selected {
+                                                accent.opacity(0.12)
+                                            } else {
+                                                transparent_black()
+                                            })
+                                            .border_1()
+                                            .border_color(if selected {
+                                                accent.opacity(0.35)
+                                            } else {
+                                                transparent_black()
+                                            })
+                                            .on_hover(cx.listener(move |this, hovered, _, cx| {
+                                                if *hovered {
+                                                    this.preview_theme(index, cx);
+                                                }
+                                            }))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.preview_theme(index, cx);
+                                                this.finish_theme_picker(true, cx);
+                                                cx.stop_propagation();
+                                            }))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_size(px(13.))
+                                                    .text_color(foreground)
+                                                    .child(name),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .text_color(muted)
+                                                    .child(description),
+                                            )
+                                            .child(
+                                                div().flex().gap_1().children(
+                                                    [
+                                                        &theme.background,
+                                                        &theme.foreground,
+                                                        &theme.accent,
+                                                    ]
+                                                    .into_iter()
+                                                    .map(|hex| {
+                                                        div()
+                                                            .size(px(10.))
+                                                            .rounded_full()
+                                                            .border_1()
+                                                            .border_color(muted.opacity(0.25))
+                                                            .bg(self.color(hex))
+                                                    }),
+                                                ),
+                                            )
+                                    }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .px_4()
+                            .py_3()
+                            .flex_shrink_0()
+                            .border_t_1()
+                            .border_color(muted.opacity(0.15))
+                            .text_size(px(11.))
+                            .text_color(muted)
+                            .child("↑ ↓ / j k preview · Enter keep · Esc cancel")
+                            .child(
+                                div()
+                                    .mt_1()
+                                    .child("Session only · config file stays untouched"),
+                            ),
+                    ),
+            )
+    }
+
     fn change_document(
         &mut self,
         change: impl FnOnce(&mut crate::documents::Documents) -> Result<()>,
@@ -609,6 +832,12 @@ impl Workspace {
         }
     }
     fn action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
+        if self.theme_picker.is_some() {
+            if action == "themes" {
+                self.finish_theme_picker(false, cx);
+            }
+            return Ok(());
+        }
         match action {
             "new" => self.change_document(
                 |documents| {
@@ -630,6 +859,7 @@ impl Workspace {
             "terminal" => self.toggle_terminal(cx)?,
             "editor" => self.set_pane(Pane::Editor, cx),
             "help" => self.help = !self.help,
+            "themes" => self.open_theme_picker(cx),
             "previous-buffer" => self.change_document(
                 |documents| {
                     documents.previous();
@@ -775,11 +1005,13 @@ impl Workspace {
             "term" | "terminal" => self.toggle_terminal(cx)?,
             "ex" | "explorer" => self.set_pane(Pane::Explorer, cx),
             "help" => self.help = true,
+            "theme" | "themes" => self.open_theme_picker(cx),
             "config" => {
                 let (config, path) = Config::load(self.config_path.as_deref())?;
                 bind_config_keys(&config, cx);
                 self.config = config;
                 self.config_path = path;
+                self.refresh_projection();
                 for heights in &mut self.row_heights {
                     heights.clear();
                 }
@@ -797,8 +1029,10 @@ impl Workspace {
         Ok(())
     }
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.follow_cursor = true;
-        self.viewport_alignment = None;
+        if self.theme_picker.is_none() {
+            self.follow_cursor = true;
+            self.viewport_alignment = None;
+        }
         let result = self.handle_key(event, window, cx);
         match result {
             Ok(false) => return,
@@ -831,6 +1065,20 @@ impl Workspace {
         let key = crate::keyboard::key(stroke);
         if stroke.modifiers.platform && stroke.key == "q" {
             self.request_window_close(window, cx);
+            return Ok(true);
+        }
+        if let Some(picker) = &self.theme_picker {
+            let selected = picker.selected;
+            let count = ThemePreset::ALL.len() + 1;
+            match key {
+                "escape" => self.finish_theme_picker(false, cx),
+                "enter" => self.finish_theme_picker(true, cx),
+                "up" | "k" => self.preview_theme((selected + count - 1) % count, cx),
+                "down" | "j" | "tab" => self.preview_theme((selected + 1) % count, cx),
+                "home" => self.preview_theme(0, cx),
+                "end" => self.preview_theme(count - 1, cx),
+                _ => {}
+            }
             return Ok(true);
         }
         if self.help {
@@ -1101,6 +1349,9 @@ impl Workspace {
         Ok(true)
     }
     fn type_text(&mut self, text: &str) {
+        if self.theme_picker.is_some() {
+            return;
+        }
         self.preferred_visual_x = None;
         if let Some(command) = &mut self.command {
             command.push_str(&text.replace(['\r', '\n'], ""));
@@ -1720,6 +1971,9 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &HelpToggle, window, cx| this.run_action("help", window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ThemesToggle, window, cx| {
+                this.run_action("themes", window, cx)
+            }))
             .on_action(cx.listener(|this, _: &PreviousBuffer, window, cx| {
                 this.run_action("previous-buffer", window, cx)
             }))
@@ -1940,6 +2194,25 @@ impl Render for Workspace {
                             .font_family(self.config.font_family.clone())
                             .child(location),
                     )
+                    .child(
+                        div()
+                            .id("themes")
+                            .px_2()
+                            .h(px(26.))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .debug_selector(|| "themes".into())
+                            .text_color(muted)
+                            .hover(|style| style.bg(accent.opacity(0.12)).text_color(foreground))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.run_action("themes", window, cx)
+                            }))
+                            .child(div().size(px(8.)).rounded_full().bg(accent))
+                            .child("Theme"),
+                    )
                     .when(self.terminal_visible, |footer| {
                         footer.child(self.dock_button("Hide Terminal", "terminal", true, cx))
                     })
@@ -1958,6 +2231,9 @@ impl Render for Workspace {
                 .child(div().flex_shrink_0().text_sm().child(r":%s/pattern/replacement/[giI]: whole-buffer substitution. Rust regex; & = match, \1 = capture. u undoes all replacements."))
                 .children(HELP.lines().map(|line| div().flex_shrink_0().text_sm().child(line.to_string())))
                 .child(div().flex_shrink_0().text_sm().child("Prose wraps. Local images render inline; remote images stay linked alt text (no network requests)."))))
+            .when(self.theme_picker.is_some(), |root| {
+                root.child(self.theme_selector(cx))
+            })
     }
 }
 
@@ -2017,6 +2293,9 @@ Ctrl-D sends EOF in Unix shells. Ctrl-Shift-V (or Cmd-V on macOS) pastes.
 Configuration: Windows %APPDATA%\rockdown\config.toml; Unix ~/.config/rockdown/config.toml
 XDG_CONFIG_HOME overrides the base directory on either platform.
 --config PATH selects an explicit file. :config reloads settings.
+Themes: footer Theme button · Ctrl/Cmd-Shift-T · :theme
+Hover or ↑/↓/j/k previews; click/Enter keeps; Esc cancels. Selection is session-only.
+[theme] preset: rockdown/nord/dracula/gruvbox/paper/solarized-light.
 markdown.colors: normal/bold/italic/bold_italic/code/link/strikethrough/quote.
 markdown.h1 through h6: font_size, color, underline.
 markdown.divider: color, thickness (also used by heading underlines).
@@ -2060,6 +2339,9 @@ impl Workspace {
         }
     }
     fn replace_input(&mut self, range: Option<Range<usize>>, text: &str) {
+        if self.theme_picker.is_some() {
+            return;
+        }
         if self.pane == Pane::Terminal {
             if let Some(terminal) = &mut self.terminal
                 && let Err(error) = terminal.send(text.as_bytes())
@@ -2160,6 +2442,9 @@ impl EntityInputHandler for Workspace {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.theme_picker.is_some() {
+            return;
+        }
         let start = range.as_ref().or(self.marked.as_ref()).map_or_else(
             || utf16_offset(self.input_text(), self.input_col()),
             |r| r.start,

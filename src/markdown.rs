@@ -11,15 +11,13 @@ use syntect::{
 };
 
 // Compiled syntax engine shared by every refresh: the grammar set and the
-// theme used for fenced code blocks.
+// themes used for fenced code blocks.
 static HIGHLIGHTER: LazyLock<(SyntaxSet, ThemeSet)> = LazyLock::new(|| {
     (
         SyntaxSet::load_defaults_newlines(),
         ThemeSet::load_defaults(),
     )
 });
-
-const THEME_NAME: &str = "base16-ocean.dark";
 
 /// Render one syntect color as the hex form the renderer's style table parses.
 fn foreground_hex(color: syntect::highlighting::Color) -> String {
@@ -208,7 +206,8 @@ enum Container {
 /// Project a single full-document parse onto physical source lines. Delimiter-only
 /// and trailing empty lines deliberately remain present, so a click always refers
 /// to the same row in the editable buffer. Offsets are UTF-8 byte offsets.
-pub fn project(source: &str) -> Vec<RenderedLine> {
+/// `dark` selects code foregrounds suited to the editor's background.
+pub fn project(source: &str, dark: bool) -> Vec<RenderedLine> {
     let mut starts = vec![0];
     starts.extend(
         source
@@ -290,8 +289,13 @@ pub fn project(source: &str) -> Vec<RenderedLine> {
                     let syntax = syntaxes
                         .find_syntax_by_token(token)
                         .unwrap_or_else(|| syntaxes.find_syntax_plain_text());
+                    let theme_name = if dark {
+                        "base16-ocean.dark"
+                    } else {
+                        "base16-ocean.light"
+                    };
                     code_highlighter =
-                        Some(HighlightLines::new(syntax, &themes.themes[THEME_NAME]));
+                        Some(HighlightLines::new(syntax, &themes.themes[theme_name]));
                 }
                 Tag::List(first) => {
                     cover(&mut lists, &starts, &range);
@@ -643,7 +647,7 @@ mod tests {
     #[test]
     fn task_offsets_come_from_parser_and_ignore_code() {
         let text = "- [ ] 世界\n> - [X] done\n\n```md\n- [ ] code\n```\n\nplain [ ] text";
-        let projected = project(text);
+        let projected = project(text, true);
         assert_eq!(projected[0].task_marker, Some(2));
         assert_eq!(projected[1].task_marker, Some(4));
         assert_eq!(projected[4].task_marker, None);
@@ -652,7 +656,7 @@ mod tests {
 
     #[test]
     fn multiline_styles_keep_unicode_and_physical_rows() {
-        let lines = project("**hé *世界*\nencore**\n\n");
+        let lines = project("**hé *世界*\nencore**\n\n", true);
         assert_eq!(lines.len(), 4);
         assert_eq!(
             lines.iter().map(|line| line.source_row).collect::<Vec<_>>(),
@@ -674,7 +678,7 @@ mod tests {
 
     #[test]
     fn fenced_blocks_do_not_parse_markdown_or_shift_following_rows() {
-        let lines = project("```rust\n**literal**\n\n世界\n```\nafter\n");
+        let lines = project("```rust\n**literal**\n\n世界\n```\nafter\n", true);
         assert_eq!(lines.len(), 7);
         assert!(lines[0].spans.is_empty());
         assert_eq!(text(&lines[1]), "**literal**");
@@ -690,7 +694,10 @@ mod tests {
 
     #[test]
     fn fenced_code_is_highlighted_with_colors_and_no_line_breaks() {
-        let lines = project("```rust\nfn main() {\n    let x = 1;\n}\n```\nprose\n");
+        let lines = project(
+            "```rust\nfn main() {\n    let x = 1;\n}\n```\nprose\n",
+            true,
+        );
         // Fence lines stay empty; body rows carry highlighted spans.
         assert!(lines[0].spans.is_empty());
         assert_eq!(text(&lines[1]), "fn main() {");
@@ -716,8 +723,33 @@ mod tests {
     }
 
     #[test]
+    fn syntax_palette_changes_foregrounds_without_changing_projection_semantics() {
+        let source = "```rust\nfn main() {\n    let greeting = \"hé 世界\";\n}\n```\n**prose** [link](target)\n";
+        let mut dark = project(source, true);
+        let mut light = project(source, false);
+
+        assert_eq!(text(&dark[1]), "fn main() {");
+        assert_eq!(text(&light[1]), "fn main() {");
+        assert!(
+            dark[1]
+                .spans
+                .iter()
+                .zip(&light[1].spans)
+                .any(|(dark, light)| dark.color != light.color),
+            "the same Rust fence must adapt its foregrounds to the background"
+        );
+
+        for line in dark.iter_mut().chain(&mut light) {
+            for span in &mut line.spans {
+                span.color = None;
+            }
+        }
+        assert_eq!(dark, light, "only syntax foregrounds may change");
+    }
+
+    #[test]
     fn unknown_fence_language_highlights_as_plain_text() {
-        let lines = project("```\nplain body\n```\n");
+        let lines = project("```\nplain body\n```\n", true);
         assert_eq!(text(&lines[1]), "plain body");
         assert!(lines[1].spans.iter().all(|span| span.code));
         assert!(lines[1].spans.iter().all(|span| span.color.is_some()));
@@ -727,6 +759,7 @@ mod tests {
     fn image_titles_set_preview_width() {
         let lines = project(
             "![a](a.png)\n![b](b.png \"40%\")\n![c](c.png \"320px\")\n![d](d.png \"nope\")\n",
+            true,
         );
         assert_eq!(lines[0].images[0].width, None);
         assert_eq!(lines[1].images[0].width, Some(ImageWidth::Fraction(0.4)));
@@ -737,7 +770,7 @@ mod tests {
 
     #[test]
     fn multiline_code_keeps_container_prefixes_out_of_content() {
-        let lines = project("> - before ` hé\n>   世界 ` after\n");
+        let lines = project("> - before ` hé\n>   世界 ` after\n", true);
         assert_eq!(text(&lines[0]), "• before hé");
         assert_eq!(text(&lines[1]), "世界 after");
         assert!(
@@ -758,6 +791,7 @@ mod tests {
     fn tables_links_and_entities_keep_source_rows() {
         let lines = project(
             "| name | value |\n| --- | --- |\n| [**A**](https://a.test) | &amp; |\n\n![*alt*](image.png)\n",
+            true,
         );
         let header = lines[0].table.as_ref().unwrap();
         assert_eq!(cell_texts(header), ["name", "value"]);
@@ -791,8 +825,9 @@ mod tests {
     fn table_cells_preserve_parser_escaping_alignment_and_inline_styles() {
         let lines = project(
             "| left | center | right | plain |\n\
-             | :--- | :---: | ---: | --- |\n\
-             | hé\\|世界 | `a\\|b` | &vert; &amp; | [*é*](https://a.test) ~~old~~ |\n",
+         | :--- | :---: | ---: | --- |\n\
+         | hé\\|世界 | `a\\|b` | &vert; &amp; | [*é*](https://a.test) ~~old~~ |\n",
+            true,
         );
         let table = lines[2].table.as_ref().unwrap();
         assert_eq!(
@@ -820,6 +855,7 @@ mod tests {
     fn missing_table_cells_stay_on_their_enclosing_source_row() {
         let lines = project(
             "| a | b | c |\n| --- | --- | --- |\n| | x |\n| only |\n| 1 | 2 | 3 | ignored |\n\nprose",
+            true,
         );
         assert_eq!(cell_texts(lines[2].table.as_ref().unwrap()), ["", "x", ""]);
         assert_eq!(
@@ -843,7 +879,8 @@ mod tests {
     fn quoted_crlf_tables_and_neighboring_tables_keep_distinct_ranges() {
         let lines = project(
             "> | hé | value |\r\n> | :--- | ---: |\r\n> | 世界 | |\r\n\r\n\
-             | next | table |\r\n| --- | :---: |\r\n\r\nfollowing\r\n",
+         | next | table |\r\n| --- | :---: |\r\n\r\nfollowing\r\n",
+            true,
         );
         for line in &lines[..3] {
             let table = line.table.as_ref().unwrap();
@@ -868,7 +905,7 @@ mod tests {
 
     #[test]
     fn header_only_table_at_eof_includes_its_delimiter() {
-        let lines = project("| heading |\n| --- |");
+        let lines = project("| heading |\n| --- |", true);
         assert_eq!(lines.len(), 2);
         assert_eq!(cell_texts(lines[0].table.as_ref().unwrap()), ["heading"]);
         let separator = lines[1].table.as_ref().unwrap();
@@ -885,7 +922,7 @@ mod mapping_tests {
     #[test]
     fn preview_offsets_skip_markup_and_keep_unicode_and_entities() {
         let source = "# **café** and [世界](target) &amp; `code`";
-        let lines = project(source);
+        let lines = project(source, true);
         let rendered: String = lines[0]
             .spans
             .iter()
@@ -907,7 +944,7 @@ mod mapping_tests {
     #[test]
     fn list_marker_and_multiline_text_map_to_physical_source_rows() {
         let source = "- **first**\n  second café\n\n> [link](url)";
-        let lines = project(source);
+        let lines = project(source, true);
         for (row, word) in [(0, "first"), (1, "café"), (3, "link")] {
             let rendered: String = lines[row]
                 .spans

@@ -15,11 +15,14 @@ terminal_height = 240
 # shell = 'C:\Program Files\PowerShell\7\pwsh.exe'
 
 [theme]
-background = "#171b22"
-panel = "#1e242e"
-foreground = "#dce3ec"
-muted = "#8995a7"
-accent = "#9cc7b5"
+# rockdown, nord, dracula, gruvbox, paper, solarized-light
+preset = "rockdown"
+# Optional overrides take precedence over the preset:
+# background = "#171b22"
+# panel = "#1e242e"
+# foreground = "#dce3ec"
+# muted = "#8995a7"
+# accent = "#9cc7b5"
 
 # Optional Markdown overrides; omitted fields retain their defaults.
 # normal inherits theme.foreground; code/link inherit theme.accent.
@@ -64,7 +67,7 @@ thickness = 1.5
 
 # Specifying keys replaces the default shortcut map.
 # Supported actions: save, paste (clipboard), explorer (toggle), terminal,
-# editor, help, buffer-delete, previous-buffer, next-buffer.
+# editor, help, themes, buffer-delete, previous-buffer, next-buffer.
 [keys]
 cmd-n = "new"
 ctrl-n = "new"
@@ -86,3 +89,5 @@ ctrl-pagedown = "next-buffer"
 cmd-w = "buffer-delete"
 ctrl-shift-w = "buffer-delete"
 f1 = "help"
+cmd-shift-t = "themes"
+ctrl-shift-t = "themes"
