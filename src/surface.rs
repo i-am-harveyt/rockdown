@@ -669,24 +669,35 @@ impl Element for Surface {
                 if let Some(range) = buffer.selected_range(source_row) {
                     let mut color = accent;
                     color.a = 0.25;
-                    let starts = hit.starts();
-                    for (visual_row, start) in starts.iter().copied().enumerate() {
-                        let end = starts
-                            .get(visual_row + 1)
-                            .copied()
-                            .unwrap_or(line.text.len());
-                        let first = range.start.max(start);
-                        let last = range.end.min(end);
-                        if first < last {
-                            let left = line.x_for_index(first) - line.x_for_index(start);
-                            let right = line.x_for_index(last) - line.x_for_index(start);
-                            result.quads.push(fill(
-                                Bounds::new(
-                                    origin + point(left, px(text_line_height) * visual_row as f32),
-                                    size((right - left).max(px(4.)), px(text_line_height)),
-                                ),
-                                color,
-                            ));
+                    if buffer.mode == Mode::VisualLine {
+                        result.quads.push(fill(
+                            Bounds::new(
+                                point(bounds.left() + px(gutter), y),
+                                size((bounds.size.width - px(gutter)).max(px(0.)), row_height),
+                            ),
+                            color,
+                        ));
+                    } else {
+                        let starts = hit.starts();
+                        for (visual_row, start) in starts.iter().copied().enumerate() {
+                            let end = starts
+                                .get(visual_row + 1)
+                                .copied()
+                                .unwrap_or(line.text.len());
+                            let first = range.start.max(start);
+                            let last = range.end.min(end);
+                            if first < last {
+                                let left = line.x_for_index(first) - line.x_for_index(start);
+                                let right = line.x_for_index(last) - line.x_for_index(start);
+                                result.quads.push(fill(
+                                    Bounds::new(
+                                        origin
+                                            + point(left, px(text_line_height) * visual_row as f32),
+                                        size((right - left).max(px(4.)), px(text_line_height)),
+                                    ),
+                                    color,
+                                ));
+                            }
                         }
                     }
                 }

@@ -7,6 +7,7 @@ pub enum Mode {
     Normal,
     Insert,
     Visual,
+    VisualLine,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -475,7 +476,7 @@ impl Buffer {
     }
 
     pub fn selected_range(&self, row: usize) -> Option<Range<usize>> {
-        if self.mode != Mode::Visual || row >= self.lines.len() {
+        if !matches!(self.mode, Mode::Visual | Mode::VisualLine) || row >= self.lines.len() {
             return None;
         }
         let anchor = self.visual_anchor?;
@@ -484,6 +485,9 @@ impl Buffer {
             return None;
         }
         let text = &self.lines[row].text;
+        if self.mode == Mode::VisualLine {
+            return Some(0..text.len());
+        }
         let first = if row == start.row {
             floor_boundary(text, start.col)
         } else {
@@ -510,13 +514,20 @@ impl Buffer {
         } else {
             Some(self.snapshot())
         };
-        if self.mode == Mode::Visual {
+        if self.mode == Mode::VisualLine {
             let (start, end) = self.visual_bounds();
-            self.delete_range(start, end);
+            self.replace_lines_with_text(start.row, end.row, text);
             self.visual_anchor = None;
             self.mode = Mode::Normal;
+        } else {
+            if self.mode == Mode::Visual {
+                let (start, end) = self.visual_bounds();
+                self.delete_range(start, end);
+                self.visual_anchor = None;
+                self.mode = Mode::Normal;
+            }
+            self.insert_literal(text);
         }
-        self.insert_literal(text);
         if let Some(before) = before {
             self.record(before);
             self.clamp();
@@ -694,13 +705,29 @@ impl Buffer {
             });
             return true;
         }
-        if self.mode == Mode::Visual {
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
             match key {
-                "v" => {
-                    self.mode = Mode::Normal;
-                    self.visual_anchor = None;
+                "v" | "V" => {
+                    let mode = if key == "V" {
+                        Mode::VisualLine
+                    } else {
+                        Mode::Visual
+                    };
+                    if self.mode == mode {
+                        self.mode = Mode::Normal;
+                        self.visual_anchor = None;
+                    } else {
+                        self.mode = mode;
+                    }
                 }
                 "y" | "d" | "c" => self.operate_visual(key.as_bytes()[0] as char),
+                ">" | "<" => {
+                    let (start, end) = self.visual_bounds();
+                    self.visual_anchor = None;
+                    self.mode = Mode::Normal;
+                    self.shift_lines(key == ">", start.row, end.row, count);
+                }
+                "p" | "P" => self.paste_visual(count),
                 "g" => {
                     self.pending = Some(Pending::G);
                     self.count = if explicit_count { Some(count) } else { None };
@@ -715,12 +742,19 @@ impl Buffer {
                 self.pending = Some(Pending::G);
                 self.count = if explicit_count { Some(count) } else { None };
             }
-            "d" | "c" | "y" => {
+            "d" | "c" | "y" | ">" | "<" => {
                 self.pending = Some(Pending::Operator(key.as_bytes()[0] as char, count))
             }
-            "v" => {
+            "v" | "V" => {
                 self.visual_anchor = Some(self.position());
-                self.mode = Mode::Visual;
+                self.mode = if key == "V" {
+                    Mode::VisualLine
+                } else {
+                    Mode::Visual
+                };
+                if self.mode == Mode::VisualLine && count > 1 {
+                    self.motion("j", count - 1, true);
+                }
             }
             "i" | "a" | "I" | "A" | "o" | "O" => self.enter_insert(key),
             "x" | "delete" => {
@@ -981,9 +1015,60 @@ impl Buffer {
         self.operate_range(operator, start, end);
     }
 
+    /// A shift uses the same literal tab as Insert's Tab key. A leading run of
+    /// spaces is outdented by one four-column tab stop without slicing Unicode.
+    fn shift_lines(&mut self, right: bool, start: usize, end: usize, levels: usize) {
+        let before = self.snapshot();
+        let indent = if right {
+            "\t".repeat(levels)
+        } else {
+            String::new()
+        };
+        let width = levels.saturating_mul(4);
+        let mut changed = false;
+        for line in &mut self.lines[start..=end] {
+            if right {
+                if !line.text.is_empty() {
+                    line.text.insert_str(0, &indent);
+                    changed = true;
+                }
+            } else {
+                let mut columns = 0;
+                let mut bytes = 0;
+                for byte in line.text.bytes() {
+                    if columns >= width {
+                        break;
+                    }
+                    match byte {
+                        b' ' => columns += 1,
+                        b'\t' => columns += 4 - columns % 4,
+                        _ => break,
+                    }
+                    bytes += 1;
+                }
+                if bytes > 0 {
+                    line.text.drain(..bytes);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.bump_revision();
+        }
+        self.row = start;
+        self.col = first_nonblank(&self.lines[start].text);
+        self.preferred_column = None;
+        self.record(before);
+        self.clamp();
+    }
+
     fn operate_lines(&mut self, operator: char, start: usize, end: usize) {
         let start = start.min(self.lines.len() - 1);
         let end = end.max(start).min(self.lines.len() - 1);
+        if matches!(operator, '>' | '<') {
+            self.shift_lines(operator == '>', start, end, 1);
+            return;
+        }
         self.register = Some(Register::Lines(
             self.lines[start..=end]
                 .iter()
@@ -1028,6 +1113,10 @@ impl Buffer {
     }
 
     fn operate_range(&mut self, operator: char, start: Position, end: Position) {
+        if matches!(operator, '>' | '<') {
+            self.shift_lines(operator == '>', start.row, end.row, 1);
+            return;
+        }
         if start != end {
             self.register = Some(Register::Characters(self.range_text(start, end)));
             self.register_changed = true;
@@ -1057,12 +1146,97 @@ impl Buffer {
 
     fn operate_visual(&mut self, operator: char) {
         let (start, end) = self.visual_bounds();
+        let linewise = self.mode == Mode::VisualLine;
         self.visual_anchor = None;
         self.mode = Mode::Normal;
-        self.operate_range(operator, start, end);
-        if operator == 'y' {
-            self.move_to(start);
+        if linewise {
+            self.operate_lines(operator, start.row, end.row);
+        } else {
+            self.operate_range(operator, start, end);
         }
+        if operator == 'y' {
+            self.move_to(if linewise {
+                Position {
+                    row: start.row,
+                    col: 0,
+                }
+            } else {
+                start
+            });
+        }
+    }
+
+    /// Replace physical rows, not a character range: neither neighbor may be
+    /// joined to the paste, even when it has no final newline or reaches EOF.
+    fn replace_lines_with_text(&mut self, start: usize, end: usize, text: &str) {
+        let text = normalize_newlines(text);
+        let mut parts = text.strip_suffix('\n').unwrap_or(&text).split('\n');
+        self.lines[start].text = parts.next().unwrap_or("").to_owned();
+        let replacement: Vec<_> = parts
+            .map(|part| Line {
+                id: self.allocate_id(),
+                text: part.to_owned(),
+            })
+            .collect();
+        self.lines.splice(start + 1..=end, replacement);
+        self.row = start;
+        self.col = first_nonblank(&self.lines[start].text);
+        self.preferred_column = None;
+        self.bump_revision();
+    }
+
+    fn paste_visual(&mut self, count: usize) {
+        let Some(register) = self.register.clone() else {
+            return;
+        };
+        let (start, end) = self.visual_bounds();
+        let linewise = self.mode == Mode::VisualLine;
+        let before = self.snapshot();
+        self.register = Some(if linewise {
+            Register::Lines(
+                self.lines[start.row..=end.row]
+                    .iter()
+                    .map(|line| line.text.clone())
+                    .collect(),
+            )
+        } else {
+            Register::Characters(self.range_text(start, end))
+        });
+        self.register_changed = true;
+        self.visual_anchor = None;
+        self.mode = Mode::Normal;
+        let source_linewise = matches!(&register, Register::Lines(_));
+        let text = match register {
+            Register::Lines(lines) => {
+                let mut text = lines.join("\n");
+                text.push('\n');
+                text.repeat(count)
+            }
+            Register::Characters(text) => text.repeat(count),
+        };
+        if linewise {
+            self.replace_lines_with_text(start.row, end.row, &text);
+        } else {
+            self.delete_range(start, end);
+            if source_linewise {
+                let prefix = self.col > 0;
+                let suffix = self.col < self.lines[self.row].text.len();
+                if prefix {
+                    self.insert_literal("\n");
+                }
+                let insertion = self.position();
+                self.insert_literal(text.strip_suffix('\n').unwrap_or(&text));
+                if suffix {
+                    self.insert_literal("\n");
+                }
+                self.move_to(insertion);
+            } else {
+                self.insert_literal(&text);
+                self.move_to(start);
+            }
+        }
+        self.record(before);
+        self.clamp();
     }
 
     fn paste(&mut self, after: bool, count: usize) {
@@ -1455,6 +1629,191 @@ mod tests {
     }
 
     #[test]
+    fn counted_shifts_preserve_ids_clipboard_and_one_undo() {
+        let mut buffer = Buffer::new("α\nβ\nγ\nδ\nε\nζ\nlast");
+        let original = buffer.lines.clone();
+        buffer.set_clipboard(Some("saved".into()), false);
+        keys(&mut buffer, &["2", ">", "3", ">"]);
+        assert_eq!(buffer.text(), "\tα\n\tβ\n\tγ\n\tδ\n\tε\n\tζ\nlast");
+        assert_eq!(buffer.col, 1);
+        assert_eq!(
+            buffer.lines.iter().map(|line| line.id).collect::<Vec<_>>(),
+            original.iter().map(|line| line.id).collect::<Vec<_>>()
+        );
+        assert!(buffer.take_yank().is_none());
+        buffer.undo();
+        assert_eq!(buffer.lines, original);
+        buffer.redo();
+        keys(&mut buffer, &["6", "<", "<"]);
+        assert_eq!(buffer.lines, original);
+        keys(&mut buffer, &["P"]);
+        assert_eq!(buffer.lines[0].text, "savedα");
+    }
+
+    #[test]
+    fn shifts_cover_motion_rows_and_outdent_only_ascii_indentation() {
+        let mut buffer = Buffer::new("    世界\n \tα\n  β\n\u{2003}γ\n\nlast");
+        let original = buffer.lines.clone();
+        keys(&mut buffer, &["<", "G"]);
+        assert_eq!(buffer.text(), "世界\nα\nβ\n\u{2003}γ\n\nlast");
+        assert_eq!(buffer.col, 0);
+        buffer.undo();
+        assert_eq!(buffer.lines, original);
+        keys(&mut buffer, &["G", ">", "g", "g"]);
+        assert_eq!(
+            buffer.text(),
+            "\t    世界\n\t \tα\n\t  β\n\t\u{2003}γ\n\n\tlast"
+        );
+        buffer.undo();
+        assert_eq!(buffer.lines, original);
+        keys(&mut buffer, &["g", "g", ">", "$"]);
+        assert_eq!(buffer.lines[0].text, "\t    世界");
+        assert_eq!(buffer.lines[1], original[1]);
+    }
+
+    #[test]
+    fn both_visual_kinds_shift_reverse_rows_and_visual_count_sets_levels() {
+        for visual in ["v", "V"] {
+            let mut buffer = Buffer::new("α\n\nβ\noutside");
+            let original = buffer.lines.clone();
+            keys(&mut buffer, &["3", "G", visual, "2", "k", "2", ">"]);
+            assert_eq!(buffer.text(), "\t\tα\n\n\t\tβ\noutside");
+            assert_eq!(buffer.mode, Mode::Normal);
+            assert_eq!((buffer.row, buffer.col), (0, 2));
+            assert!(buffer.take_yank().is_none());
+            buffer.undo();
+            assert_eq!(buffer.lines, original);
+        }
+    }
+
+    #[test]
+    fn visual_line_selection_is_full_rows_and_toggles_keep_anchor() {
+        let mut buffer = Buffer::new("αβ\n\n世界\noutside");
+        keys(&mut buffer, &["3", "G", "l", "V", "2", "k"]);
+        assert_eq!(buffer.selected_range(0), Some(0..4));
+        assert_eq!(buffer.selected_range(1), Some(0..0));
+        assert_eq!(buffer.selected_range(2), Some(0..6));
+        assert_eq!(buffer.selected_range(3), None);
+        keys(&mut buffer, &["v"]);
+        assert_eq!(buffer.mode, Mode::Visual);
+        assert_eq!(buffer.selected_range(0), Some(2..4));
+        keys(&mut buffer, &["V"]);
+        assert_eq!(buffer.mode, Mode::VisualLine);
+        assert_eq!(buffer.selected_range(0), Some(0..4));
+        keys(&mut buffer, &["V"]);
+        assert_eq!(buffer.mode, Mode::Normal);
+        assert_eq!(buffer.selected_range(0), None);
+        keys(&mut buffer, &["3", "V"]);
+        assert_eq!(buffer.selected_range(2), Some(0..6));
+        keys(&mut buffer, &["y"]);
+        assert_eq!(buffer.take_yank(), Some(("αβ\n\n世界\n".into(), true)));
+        assert_eq!((buffer.row, buffer.col), (0, 0));
+    }
+
+    #[test]
+    fn visual_line_delete_empty_and_final_rows_does_not_join_neighbors() {
+        let mut buffer = Buffer::new("before\n\nlast");
+        let original = buffer.lines.clone();
+        keys(&mut buffer, &["G", "V", "k", "d"]);
+        assert_eq!(buffer.text(), "before");
+        assert_eq!(buffer.take_yank(), Some(("\nlast\n".into(), true)));
+        buffer.undo();
+        assert_eq!(buffer.lines, original);
+        keys(&mut buffer, &["g", "g", "V", "G", "d"]);
+        assert_eq!(buffer.text(), "");
+        assert_eq!((buffer.row, buffer.col), (0, 0));
+        assert_eq!(buffer.take_yank(), Some(("before\n\nlast\n".into(), true)));
+        keys(&mut buffer, &["V", "y"]);
+        assert_eq!(buffer.take_yank(), Some(("\n".into(), true)));
+        buffer.undo();
+        assert_eq!(buffer.lines, original);
+    }
+
+    #[test]
+    fn visual_line_change_including_empty_eof_is_one_insert_transaction() {
+        for text in ["first\n\nlast", "first\n"] {
+            let mut buffer = Buffer::new(text);
+            let original = buffer.lines.clone();
+            keys(&mut buffer, &["V", "j", "c"]);
+            assert_eq!(buffer.mode, Mode::Insert);
+            assert_eq!(buffer.take_yank(), Some(("first\n\n".into(), true)));
+            buffer.insert_text("replacement");
+            keys(&mut buffer, &["escape"]);
+            assert_eq!(
+                buffer.text(),
+                if text.ends_with("last") {
+                    "replacement\nlast"
+                } else {
+                    "replacement"
+                }
+            );
+            assert_eq!(buffer.lines[0].id, original[0].id);
+            buffer.undo();
+            assert_eq!(buffer.lines, original);
+            buffer.redo();
+            assert_eq!(buffer.lines[0].text, "replacement");
+        }
+    }
+
+    #[test]
+    fn visual_line_literal_paste_keeps_neighbors_and_register_at_eof() {
+        for (motion, expected) in [("j", "before\nx\n\ny\nlast"), ("G", "before\n\nx\n\ny")] {
+            let mut buffer = Buffer::new("before\n\nlast");
+            let original = buffer.lines.clone();
+            buffer.set_clipboard(Some("saved".into()), false);
+            keys(&mut buffer, &[motion, "V"]);
+            buffer.insert_text("x\r\n\r\ny\r\n");
+            assert_eq!(buffer.text(), expected);
+            assert_eq!(buffer.mode, Mode::Normal);
+            assert!(buffer.take_yank().is_none());
+            buffer.undo();
+            assert_eq!(buffer.lines, original);
+            keys(&mut buffer, &["g", "g", "P"]);
+            assert_eq!(buffer.lines[0].text, "savedbefore");
+        }
+    }
+
+    #[test]
+    fn visual_line_register_replacement_uses_boundaries_and_exports_deleted_rows() {
+        for linewise in [false, true] {
+            for paste in ["p", "P"] {
+                let mut buffer = Buffer::new("before\n\nlast");
+                let original = buffer.lines.clone();
+                buffer.set_clipboard(Some("x\r\ny\r\n".into()), linewise);
+                keys(&mut buffer, &["j", "V", paste]);
+                assert_eq!(buffer.text(), "before\nx\ny\nlast");
+                assert_eq!(buffer.take_yank(), Some(("\n".into(), true)));
+                buffer.undo();
+                assert_eq!(buffer.lines, original);
+            }
+        }
+        let mut buffer = Buffer::new("only");
+        buffer.set_clipboard(Some("x\n".into()), true);
+        keys(&mut buffer, &["V", "2", "p"]);
+        assert_eq!(buffer.text(), "x\nx");
+        assert_eq!(buffer.take_yank(), Some(("only\n".into(), true)));
+        buffer.undo();
+        assert_eq!(buffer.text(), "only");
+    }
+
+    #[test]
+    fn character_visual_paste_keeps_character_and_line_register_semantics() {
+        let mut buffer = Buffer::new("a世界z");
+        keys(&mut buffer, &["l", "v", "l", "y"]);
+        assert_eq!(buffer.take_yank(), Some(("世界".into(), false)));
+        buffer.set_clipboard(Some("x\ny\n".into()), true);
+        keys(&mut buffer, &["v", "l", "p"]);
+        assert_eq!(buffer.text(), "a\nx\ny\nz");
+        assert_eq!(buffer.take_yank(), Some(("世界".into(), false)));
+        buffer.undo();
+        assert_eq!(buffer.text(), "a世界z");
+        buffer.set_clipboard(Some("界".into()), false);
+        keys(&mut buffer, &["v", "P"]);
+        assert_eq!(buffer.text(), "a世界z");
+        assert_eq!(buffer.take_yank(), Some(("界".into(), false)));
+    }
+
+    #[test]
     fn markdown_enter_preserves_tail_and_undo() {
         let mut buffer = Buffer::new("- hello 世界");
         buffer.key("i");
@@ -1514,20 +1873,21 @@ mod tests {
 
     #[test]
     fn literal_crlf_paste_is_one_undo_in_normal_insert_and_visual_modes() {
-        for mode in [Mode::Normal, Mode::Insert, Mode::Visual] {
+        for mode in [Mode::Normal, Mode::Insert, Mode::Visual, Mode::VisualLine] {
             let mut buffer = Buffer::new("ab");
             let original = buffer.lines.clone();
             match mode {
                 Mode::Insert => keys(&mut buffer, &["i"]),
                 Mode::Visual => keys(&mut buffer, &["v"]),
+                Mode::VisualLine => keys(&mut buffer, &["V"]),
                 Mode::Normal => {}
             }
             buffer.insert_text("x\r\ny\rz\r\n");
             keys(&mut buffer, &["escape"]);
-            let expected = if mode == Mode::Visual {
-                "x\ny\rz\nb"
-            } else {
-                "x\ny\rz\nab"
+            let expected = match mode {
+                Mode::Visual => "x\ny\rz\nb",
+                Mode::VisualLine => "x\ny\rz",
+                Mode::Normal | Mode::Insert => "x\ny\rz\nab",
             };
             assert_eq!(buffer.text(), expected);
             assert!(buffer.dirty());

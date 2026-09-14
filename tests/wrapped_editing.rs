@@ -110,6 +110,78 @@ fn preview_click_skips_hidden_markup_and_drag_selects_across_wraps(cx: &mut Test
 }
 
 #[gpui::test]
+fn visual_line_copy_preserves_empty_lines_and_paste_uses_current_clipboard(
+    cx: &mut TestAppContext,
+) {
+    let (_directory, mut window, view) = editor(cx, "alpha\n\nomega");
+    window.simulate_keystrokes("j V");
+    window.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-c"
+    } else {
+        "ctrl-c"
+    });
+    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "\n");
+    window.simulate_keystrokes("escape G p");
+    window.update(|_, cx| {
+        assert_eq!(
+            view.read(cx).documents.current().buffer.text(),
+            "alpha\n\nomega\n"
+        );
+    });
+    window.simulate_keystrokes("u G V");
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("replacement\nmore".into()));
+    window.simulate_keystrokes("p");
+    window.update(|_, cx| {
+        assert_eq!(
+            view.read(cx).documents.current().buffer.text(),
+            "alpha\n\nreplacement\nmore"
+        );
+    });
+    window.simulate_keystrokes("u");
+    window.update(|_, cx| {
+        assert_eq!(
+            view.read(cx).documents.current().buffer.text(),
+            "alpha\n\nomega"
+        );
+    });
+}
+
+#[gpui::test]
+fn shifted_indent_keys_and_visual_line_change_reach_markdown_buffer(cx: &mut TestAppContext) {
+    let (_directory, mut window, view) = editor(cx, "alpha\nbeta\nomega");
+    window.simulate_keystrokes("> >");
+    window.update(|_, cx| {
+        assert_eq!(
+            view.read(cx).documents.current().buffer.text(),
+            "\talpha\nbeta\nomega"
+        );
+    });
+    window.simulate_keystrokes("< < V j >");
+    window.update(|_, cx| {
+        assert_eq!(
+            view.read(cx).documents.current().buffer.text(),
+            "\talpha\n\tbeta\nomega"
+        );
+    });
+    window.simulate_keystrokes("u g g V j c");
+    window.simulate_input("replacement");
+    window.simulate_keystrokes("escape");
+    window.update(|_, cx| {
+        assert_eq!(
+            view.read(cx).documents.current().buffer.text(),
+            "replacement\nomega"
+        );
+    });
+    window.simulate_keystrokes("u");
+    window.update(|_, cx| {
+        assert_eq!(
+            view.read(cx).documents.current().buffer.text(),
+            "alpha\nbeta\nomega"
+        );
+    });
+}
+
+#[gpui::test]
 fn caret_remains_visible_inside_a_paragraph_taller_than_the_viewport(cx: &mut TestAppContext) {
     let text = "many words filling one very long paragraph ".repeat(100);
     let (_directory, mut window, view) = editor(cx, &text);

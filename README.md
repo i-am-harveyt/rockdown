@@ -4,7 +4,7 @@ A lightweight, native Markdown editor built with **Rust and GPUI**. Write in pla
 
 ## What it does
 
-- **Focused writing layout:** a centered Markdown column, optional line numbers, and compact document tabs with full paths on hover. Opening a named file starts with Files hidden; opening a directory keeps Files visible.
+- **Focused writing layout:** a centered Markdown column with generous vertical spacing, optional line numbers, and softly outlined document tabs with full paths on hover. Native UI typography separates the window controls, file-drawer headings, and status bar from the configurable editor font. Subtle theme-derived dividers and a tinted Vim-mode badge keep the chrome quiet. Opening a named file starts with Files hidden; opening a directory keeps Files visible.
 - **Live-preview Markdown:** headings, emphasis, code, lists, task lists, tables, quotes, wrapped prose, and local images.
 - **Vim-style editing:** Normal, Insert, and Visual modes; motions, counts, operators, search, and undo/redo.
 - **Multiple buffers:** switch between documents without losing unsaved text, cursor position, viewport, or undo history.
@@ -131,6 +131,7 @@ Click a pane to focus it. In Markdown, clicks place the caret near the clicked t
 | `o`, `O` | Open a line below/above and enter Insert mode. |
 | `Esc` | Return to Normal mode. |
 | `v` | Enter Visual mode for character selections. |
+| `V` | Enter Visual-line mode to select complete lines, including empty lines. |
 | `h`, `j`, `k`, `l` or arrow keys | Move the cursor. |
 | `w`, `b`, `e` | Move by words. |
 | `0`, `$` | Move to the beginning/end of the line. |
@@ -140,11 +141,15 @@ Click a pane to focus it. In Markdown, clicks place the caret near the clicked t
 | `x`, `dd`, `dw`, `d$` | Delete a character, line, word, or through the end of the line. |
 | `cc`, `cw` | Change a line or word and enter Insert mode. |
 | `yy`, `p`, `P` | Yank a line; paste after/before the cursor. |
+| `>>`, `<<` | Indent / outdent the current line; `3>>` shifts three lines. |
+| `>`, `<` in either Visual mode | Indent / outdent every selected line. |
 | `u`, `Ctrl-R` | Undo / redo. |
 | `/text`, then Return | Search forward for literal text. |
 | `n` | Find the next match. |
 
-Counts work with supported motions and operators, such as `3j` or `2dd`. In Visual mode, use `y`, `d`, or `c` to yank, delete, or change the selection. `Ctrl-C` copies a visual selection to the system clipboard; `Ctrl-V` pastes clipboard text. On macOS, use `Cmd-C` / `Cmd-V` instead. `Ctrl-Shift-V` pastes on all platforms.
+Counts work with supported motions and operators, such as `3j` or `2dd`. In either Visual mode, use `y`, `d`, or `c` to yank, delete, or change the selection; `p` / `P` replace it with the current clipboard. `V` selects whole lines, while `v` selects characters. Press the other visual key to switch selection type, or repeat the current one to return to Normal mode. `Ctrl-C` copies a visual selection to the system clipboard, preserving whole-line paste behavior for Visual-line selections; `Ctrl-V` pastes clipboard text. On macOS, use `Cmd-C` / `Cmd-V` instead. `Ctrl-Shift-V` pastes on all platforms.
+
+Indentation uses a literal tab, matching Insert-mode Tab. Outdent removes leading ASCII whitespace through one four-column tab stop (one tab or up to four spaces). Completely empty lines stay empty when indented. Shifts are one undoable edit and leave the clipboard unchanged. Motion forms such as `>j` and `<G` work too; a count in Visual mode, such as `3>`, shifts the selection by that many indentation levels.
 
 The editor and file explorer share the **system clipboard** for Vim operations: `y`/`yy` copy text, and `p`/`P` paste the current clipboard after/before the cursor. This also works across buffers and after explorer navigation or refresh. Linewise yanks paste as whole lines; characterwise yanks stay inline. Text copied from another application replaces the previous yank. As with Vim's unnamed register, delete/change operations also copy the removed text. Explorer yanks copy the displayed filename, not the file's contents.
 
