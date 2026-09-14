@@ -849,7 +849,7 @@ impl Workspace {
         }
         if clipboard_shortcut && stroke.key == "c" && self.pane != Pane::Terminal {
             let buffer = self.buffer();
-            let selected = buffer
+            let mut selected = buffer
                 .lines
                 .iter()
                 .enumerate()
@@ -858,8 +858,20 @@ impl Workspace {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
+            let linewise = buffer.mode == Mode::VisualLine;
+            if linewise {
+                selected.push('\n');
+            }
             if !selected.is_empty() {
-                cx.write_to_clipboard(ClipboardItem::new_string(selected));
+                cx.write_to_clipboard(ClipboardItem::new_string_with_metadata(
+                    selected,
+                    if linewise {
+                        "rockdown:lines"
+                    } else {
+                        "rockdown:characters"
+                    }
+                    .to_string(),
+                ));
             }
             return Ok(true);
         }
@@ -952,7 +964,7 @@ impl Workspace {
                         buffer.key("enter");
                     }
                 }
-                Mode::Visual => {
+                Mode::Visual | Mode::VisualLine => {
                     buffer.key("c");
                     buffer.key("enter");
                 }
@@ -1044,7 +1056,7 @@ impl Workspace {
             key.to_string()
         };
         self.marked = None;
-        if self.buffer().mode == Mode::Normal && matches!(key.as_str(), "p" | "P") {
+        if self.buffer().mode != Mode::Insert && matches!(key.as_str(), "p" | "P") {
             let clipboard = cx.read_from_clipboard();
             let text = clipboard.as_ref().and_then(ClipboardItem::text);
             let linewise = match clipboard
@@ -1194,7 +1206,7 @@ impl Workspace {
             return;
         }
         if let Some(head) = self.mouse_location(pane, event.position)
-            && (head != (row, col) || self.buffer().mode == Mode::Visual)
+            && (head != (row, col) || matches!(self.buffer().mode, Mode::Visual | Mode::VisualLine))
         {
             self.buffer_mut().select_with_mouse((row, col), head);
             cx.notify();
@@ -1639,6 +1651,7 @@ impl Render for Workspace {
                 Mode::Normal => "NORMAL",
                 Mode::Insert => "INSERT",
                 Mode::Visual => "VISUAL",
+                Mode::VisualLine => "VISUAL LINE",
             }
         };
         let location = format!(
@@ -1970,11 +1983,13 @@ impl Render for ControlTooltip {
     }
 }
 
-const HELP: &str = r#"Editing: i/a/I/A insert · o/O new line · Esc normal · v visual
+const HELP: &str = r#"Editing: i/a/I/A insert · o/O new line · Esc normal · v visual · V visual-line
 Return splits at the caret and continues Markdown lists/quotes in Insert mode.
 Shift-Return inserts a literal newline; Normal-mode Return opens a line below.
 h/j/k/l or arrows · w/b/e words · 0/$ line · gg/G document
 x delete · dd/dw/d$ delete · cc/cw change · yy yank · p/P paste
+>>/<< indent/outdent · Visual >/< shifts selected lines · 3>> shifts three lines
+Visual y/d/c yank/delete/change · p/P replace · v/V switch selection type
 u undo · Ctrl-R redo · counts: 3j, 2dd · /find then n repeat
 Clipboard: Ctrl-C/V in Editor and Files (Cmd-C/V on macOS).
 Ctrl-Shift-V pastes in every pane; terminal paste respects bracketed-paste mode.
