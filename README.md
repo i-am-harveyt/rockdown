@@ -42,6 +42,9 @@ cargo build --release --locked
 # Open a document.
 ./target/release/rockdown /path/to/notes/note.md
 
+# Open several documents; missing files become named buffers.
+./target/release/rockdown README.md test.md
+
 # Use the current directory.
 ./target/release/rockdown
 ```
@@ -52,7 +55,7 @@ You can also build and launch in one command:
 cargo run --release -- /path/to/notes
 ```
 
-Passing a nonexistent filename starts an empty buffer at that path, provided its parent directory exists. The file is created when you save it.
+Passing nonexistent filenames starts empty buffers at those paths, provided their parent directories exist. Files are created only when you save them. Multiple files open in argument order with the first file active; repeated paths reuse the same buffer. A directory must be the only positional path. Use `--` before filenames that begin with a dash.
 
 ### Windows quick start
 
@@ -208,7 +211,7 @@ Enter these commands from Normal mode. Focus the editor first with `Ctrl-W h`; `
 | `:w` | Save the current document. |
 | `:w filename.md` | Save under the given filename. |
 | `:w! [filename.md]` | Explicitly overwrite a disk conflict or existing destination. |
-| `:e filename.md` | Open an existing file, or activate its existing buffer. Other buffers keep their edits. |
+| `:e filename.md` | Open a file, start a named buffer if it does not exist, or activate its existing buffer. Other buffers keep their edits. |
 | `:e` | Reload the current document, refusing unsaved changes. |
 | `:e!` | Discard current edits and reload from disk. |
 | `:q` | Close the window only if all editor buffers and the explorer are clean. |
