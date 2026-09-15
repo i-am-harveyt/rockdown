@@ -122,10 +122,32 @@ Press **F1** or enter `:help` for the in-app reference. Browse Editing, Navigati
 | `Ctrl-PageUp` / `Ctrl-PageDown` | Previous / next editor buffer. |
 | `Cmd-W` / `Ctrl-Shift-W` | Close the current editor buffer, prompting to Save / Discard / Cancel if needed. |
 | `F1` | Toggle the keyboard guide. |
+| `Cmd-Shift-O` / `Ctrl-Shift-O` | Toggle the searchable document outline. |
 
 Click a pane to focus it. In Markdown, clicks place the caret near the clicked text and preserve Insert mode; dragging or double-clicking a word creates a Vim Visual selection. Active prose stays wrapped, and Insert-mode Up/Down move between visual rows. The **terminal icon** is at the bottom-left; the **folder** and **circled question-mark** icons at the bottom-right toggle Files and Help. Hover for a tooltip identifying the action; icons stay highlighted while their dock or guide is open. Footer buttons, buffer tabs, and tab-close controls have distinct hover and pressed highlights. The macOS title bar centers **Rockdown — {buffer name}** and updates when you switch or save a buffer under a new name.
 
 ## Markdown editing
+
+### Document outline and section links
+
+Click **Outline** in the footer, press **Cmd/Ctrl-Shift-O**, or enter `:outline`.
+The dismissible navigator lists the current Markdown document's headings with
+their hierarchy and current-section indication. Type to filter heading titles
+(including Chinese IME input), use Up/Down to select and Enter to jump, or click a
+heading. Escape dismisses it. Navigation leaves document text, editing mode, and
+undo history unchanged.
+
+ATX (`# Heading`) and setext headings are included, including headings inside
+quotes or lists; apparent headings inside code blocks are excluded. The outline
+updates after edits, document switches, and Save As. Non-Markdown files do not
+generate an outline.
+
+Cmd-click or Ctrl-click a local `#fragment` link in Markdown preview to jump to
+its heading, including wrapped prose and table cells. Anchors use lowercase
+Unicode heading text with punctuation removed, whitespace replaced by hyphens,
+and numeric suffixes for duplicates. Percent-encoded fragments are supported.
+Unknown fragments do not move the caret. This is document-local navigation:
+it does not open remote links, build a cross-file index, or fetch anything.
 
 ### Modes and common keys
 
@@ -164,6 +186,50 @@ The editor and file explorer share the **system clipboard** for Vim operations: 
 In Insert mode, Return continues a Markdown list or quote using the current indentation and marker. Numbered lists increment the current number; a new task starts unchecked. Return on an empty item removes its marker, and an empty quote exits one quote level. **Shift-Return** always inserts a literal newline. Plain-text files, code blocks, Normal/Visual Return behavior, and pasted text remain literal.
 
 Click a task's `[ ]` or `[x]` marker to toggle it in source or preview. The change is undoable and preserves the caret and editing mode. Modified clicks retain ordinary editor behavior. Task-like text inside code blocks is not interactive.
+
+### Pasting and dropping images
+
+Paste an image with **Cmd-V** or **Ctrl-Shift-V**, or drag local image files into
+the Markdown editor. Clipboard images insert at the caret; file drops use the
+drop position when it is over laid-out text. PNG, JPEG, GIF, and WebP are checked
+from their actual bytes, not just their extensions.
+
+Rockdown copies the images into `assets/` beside the document and inserts ordinary
+Markdown links. Set the top-level `image_assets_dir = "assets"` option to another
+relative child directory, such as `"images"` or `"文章 圖片"`. Absolute paths,
+parent traversal, backslashes/drive prefixes, and symlink asset directories are
+rejected. Imported links percent-encode spaces, Chinese characters, and reserved
+filename characters so the document and asset directory can travel together.
+
+- Untitled documents first open Save As. Cancelling creates no assets. The import
+  stays attached to the initiating document if you switch tabs while the dialog
+  is open; changing or closing that document cancels the pending import.
+- Existing assets are never overwritten. Identical regular-file assets can be
+  reused; other collisions receive a new filename. Original image files are
+  copied, never moved.
+- Image validation and copying run in the background. Switching tabs keeps the
+  import attached to its original document and insertion position. Editing,
+  reloading, saving, or closing that document before completion rejects the
+  insertion with a retry message; already copied assets are retained.
+- A batch inserts as one undoable edit. A validation or copy failure rolls back
+  newly created assets; undo removes the Markdown insertion **without deleting
+  image files**, which might be shared by other links. The document remains
+  unsaved until you Save.
+- Files refreshes automatically after images are copied. Pending Files edits are
+  never discarded: commit or undo those edits, then use `:e` when the status bar
+  reports that refreshing was deferred.
+- Plain-text files, the terminal, Files, and the outline do not import images.
+  Text clipboard content stays literal.
+- Local previews load in the background, are centered in the writing column,
+  and honor EXIF rotation and mirroring. Preview bitmaps are limited to 1600
+  pixels on their longest edge; source image bytes remain unchanged.
+- Missing, unreadable, or unsupported local images show an explanatory preview
+  label. Restoring or replacing a missing file is picked up on the next render.
+  Remote images remain alt text: nothing is uploaded or fetched.
+
+Save As and file renames do not relocate existing assets or rewrite their links.
+Move/copy the Markdown file together with its relative asset directory when
+relocating the document.
 
 ### Whole-buffer substitution
 
@@ -364,6 +430,7 @@ font_size = 16
 line_height = 30
 explorer_width = 300
 terminal_height = 240
+image_assets_dir = "assets"
 shell = "/bin/zsh"
 
 [theme]
@@ -383,6 +450,7 @@ A complete example, including the default shortcut map, is provided in [`example
 | `font_family` | `Consolas` on Windows, `Menlo` elsewhere | Use a font installed on your system. |
 | `font_size` | `15` | Range: 10–32. |
 | `line_height` | `30` | At least `font_size + 4`, at most 64. |
+| `image_assets_dir` | `"assets"` | Relative child directory for pasted/dropped images; no parent traversal or symlink directories. |
 | `explorer_width` | `290` | Configured range: 180–600; display width also respects window size. |
 | `terminal_height` | `240` | Range: 100–600. |
 | `shell` | Windows: `%COMSPEC%`, then `cmd.exe`; Unix: `$SHELL`, then `/bin/sh` | Shell executable, not a command string with arguments. |
@@ -432,11 +500,16 @@ Supported action names are:
 
 ```text
 save
+new
+open
+save-as
 paste
 explorer
 terminal
 editor
 help
+themes
+outline
 buffer-delete
 previous-buffer
 next-buffer

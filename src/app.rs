@@ -3,7 +3,9 @@ use crate::{
     config::{Config, Theme, ThemePreset, parse_color},
     document::Document,
     explorer::Explorer,
+    image_assets::{self, ImageInput},
     markdown::{self, RenderedLine},
+    outline::{self, Heading},
     recovery::RecoveryStore,
     terminal::{Terminal, key_bytes},
     vim::{Buffer, Mode},
@@ -30,6 +32,7 @@ actions!(
         EditorPane,
         HelpToggle,
         ThemesToggle,
+        OutlineToggle,
         PreviousBuffer,
         NextBuffer,
         BufferDelete
@@ -52,6 +55,7 @@ pub fn bind_config_keys(config: &Config, cx: &mut App) {
             "editor" => Box::new(EditorPane),
             "help" => Box::new(HelpToggle),
             "themes" => Box::new(ThemesToggle),
+            "outline" => Box::new(OutlineToggle),
             "previous-buffer" => Box::new(PreviousBuffer),
             "next-buffer" => Box::new(NextBuffer),
             "buffer-delete" => Box::new(BufferDelete),
@@ -85,6 +89,16 @@ struct ThemePicker {
     selected: usize,
 }
 
+struct OutlinePicker {
+    query: String,
+    col: usize,
+    matches: Vec<usize>,
+    selected: usize,
+    scroll: ScrollHandle,
+    input_bounds: Bounds<Pixels>,
+    input_line: Option<ShapedLine>,
+}
+
 pub struct Workspace {
     pub config: Config,
     pub config_path: Option<PathBuf>,
@@ -113,6 +127,8 @@ pub struct Workspace {
     pub help: bool,
     help_section: usize,
     theme_picker: Option<ThemePicker>,
+    headings: Vec<Heading>,
+    outline_picker: Option<OutlinePicker>,
     pub marked: Option<Range<usize>>,
     dialog_pending: bool,
     search: String,
@@ -140,6 +156,11 @@ impl Workspace {
             Vec::new()
         };
         let explorer_visible = document.path.is_none();
+        let headings = if document.is_markdown() {
+            outline::headings(&document.buffer.text())
+        } else {
+            Vec::new()
+        };
         Self {
             config,
             config_path,
@@ -173,6 +194,8 @@ impl Workspace {
             help: false,
             help_section: 0,
             theme_picker: None,
+            headings,
+            outline_picker: None,
             marked: None,
             dialog_pending: false,
             search: String::new(),
@@ -295,16 +318,294 @@ impl Workspace {
     }
     pub fn refresh_projection(&mut self) {
         let document = self.documents.current();
-        self.projection = if document.is_markdown() {
-            markdown::project(&document.buffer.text(), self.config.theme.is_dark())
+        if document.is_markdown() {
+            let source = document.buffer.text();
+            self.projection = markdown::project(&source, self.config.theme.is_dark());
+            self.headings = outline::headings(&source);
         } else {
-            Vec::new()
-        };
+            self.projection.clear();
+            self.headings.clear();
+        }
+        self.filter_outline();
         self.row_heights[Pane::Editor.index()].clear();
+    }
+
+    fn dismiss_outline(&mut self) {
+        if self.outline_picker.take().is_some() {
+            self.marked = None;
+        }
+    }
+
+    fn toggle_outline(&mut self, cx: &mut Context<Self>) {
+        if self.outline_picker.is_some() {
+            self.dismiss_outline();
+            return;
+        }
+        self.help = false;
+        self.set_pane(Pane::Editor, cx);
+        let selected = self
+            .headings
+            .partition_point(|heading| heading.row <= self.documents.current().buffer.row)
+            .saturating_sub(1);
+        let scroll = ScrollHandle::new();
+        scroll.scroll_to_item(selected);
+        self.outline_picker = Some(OutlinePicker {
+            query: String::new(),
+            col: 0,
+            matches: (0..self.headings.len()).collect(),
+            selected,
+            scroll,
+            input_bounds: Bounds::default(),
+            input_line: None,
+        });
+    }
+
+    fn filter_outline(&mut self) {
+        let Some(picker) = &mut self.outline_picker else {
+            return;
+        };
+        let query = picker.query.to_lowercase();
+        picker.matches = self
+            .headings
+            .iter()
+            .enumerate()
+            .filter(|(_, heading)| heading.title.to_lowercase().contains(&query))
+            .map(|(index, _)| index)
+            .collect();
+        picker.selected = 0;
+        picker.scroll.scroll_to_item(0);
+    }
+
+    fn jump_to_heading(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_outline();
+        self.set_pane(Pane::Editor, cx);
+        let buffer = &mut self.documents.current_mut().buffer;
+        buffer.row = row.min(buffer.lines.len() - 1);
+        buffer.col = 0;
+        self.viewport_alignment = Some((Pane::Editor, false));
+        self.follow_cursor = false;
+        self.focus.focus(window);
+        cx.notify();
+    }
+
+    fn outline_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let picker = self.outline_picker.as_ref().expect("open outline");
+        let panel = self.color(&self.config.theme.panel);
+        let foreground = self.color(&self.config.theme.foreground);
+        let muted = self.color(&self.config.theme.muted);
+        let accent = self.color(&self.config.theme.accent);
+        let current = self
+            .headings
+            .partition_point(|heading| heading.row <= self.documents.current().buffer.row)
+            .checked_sub(1);
+        let empty = if !self.documents.current().is_markdown() {
+            "Outline is available for Markdown documents (.md)."
+        } else if self.headings.is_empty() {
+            "No headings yet. Add a Markdown heading to navigate."
+        } else {
+            "No headings match your search."
+        };
+        let entity = cx.entity();
+        let input_entity = entity.clone();
+        div()
+            .id("outline-overlay")
+            .absolute()
+            .inset_0()
+            .p_4()
+            .flex()
+            .items_center()
+            .justify_end()
+            .occlude()
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.dismiss_outline();
+                this.focus.focus(window);
+                cx.notify();
+                cx.stop_propagation();
+            }))
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .id("outline-panel")
+                    .debug_selector(|| "outline-panel".into())
+                    .w(px(440.))
+                    .max_w_full()
+                    .max_h_full()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .rounded_xl()
+                    .bg(panel)
+                    .border_1()
+                    .border_color(muted.opacity(0.25))
+                    .shadow_lg()
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .p_4()
+                            .flex_shrink_0()
+                            .text_color(foreground)
+                            .child("Document Outline")
+                            .child(
+                                div()
+                                    .mt_2()
+                                    .text_size(px(11.))
+                                    .text_color(muted)
+                                    .child("Type to filter headings"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .mx_4()
+                            .mb_2()
+                            .px_2()
+                            .rounded_md()
+                            .bg(self.color(&self.config.theme.background))
+                            .child(
+                                canvas(
+                                    move |bounds, window, cx| {
+                                        input_entity.update(cx, |this, _| {
+                                            let picker =
+                                                this.outline_picker.as_mut().expect("open outline");
+                                            let line = window.text_system().shape_line(
+                                                picker.query.clone().into(),
+                                                px(14.),
+                                                &[TextRun {
+                                                    len: picker.query.len(),
+                                                    font: font(this.config.font_family.clone()),
+                                                    color: foreground,
+                                                    background_color: None,
+                                                    underline: None,
+                                                    strikethrough: None,
+                                                }],
+                                                None,
+                                            );
+                                            picker.input_bounds = bounds;
+                                            picker.input_line = Some(line.clone());
+                                            (line, picker.col)
+                                        })
+                                    },
+                                    move |bounds, (line, col), window, cx| {
+                                        let focus = entity.read(cx).focus.clone();
+                                        window.handle_input(
+                                            &focus,
+                                            ElementInputHandler::new(bounds, entity.clone()),
+                                            cx,
+                                        );
+                                        let x = line.x_for_index(col);
+                                        let shift = (x - bounds.size.width + px(3.)).max(px(0.));
+                                        let origin = bounds.origin - point(shift, px(0.));
+                                        window.with_content_mask(
+                                            Some(ContentMask { bounds }),
+                                            |window| {
+                                                if let Err(error) =
+                                                    line.paint(origin, px(30.), window, cx)
+                                                {
+                                                    eprintln!("Outline search rendering: {error}");
+                                                }
+                                                window.paint_quad(fill(
+                                                    Bounds::new(
+                                                        origin + point(x, px(5.)),
+                                                        size(px(1.), px(20.)),
+                                                    ),
+                                                    accent,
+                                                ));
+                                            },
+                                        );
+                                    },
+                                )
+                                .w_full()
+                                .h(px(30.)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("outline-results")
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&picker.scroll)
+                            .px_2()
+                            .pb_2()
+                            .when(picker.matches.is_empty(), |list| {
+                                list.child(
+                                    div()
+                                        .id("outline-empty")
+                                        .debug_selector(|| "outline-empty".into())
+                                        .p_4()
+                                        .text_size(px(13.))
+                                        .text_color(muted)
+                                        .child(empty),
+                                )
+                            })
+                            .children(picker.matches.iter().enumerate().map(
+                                |(position, &index)| {
+                                    let heading = &self.headings[index];
+                                    let row = heading.row;
+                                    div()
+                                        .id(("outline-heading", index))
+                                        .debug_selector(move || format!("outline-heading-{index}"))
+                                        .h(px(34.))
+                                        .flex_shrink_0()
+                                        .pl(px(10. + f32::from(heading.level - 1) * 14.))
+                                        .pr_2()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .bg(if position == picker.selected {
+                                            accent.opacity(0.12)
+                                        } else {
+                                            transparent_black()
+                                        })
+                                        .hover(|style| style.bg(accent.opacity(0.18)))
+                                        .text_size(px(13.))
+                                        .text_color(foreground)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.jump_to_heading(row, window, cx);
+                                            cx.stop_propagation();
+                                        }))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .child(heading.title.clone()),
+                                        )
+                                        .when(current == Some(index), |item| {
+                                            item.child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .text_color(accent)
+                                                    .child("current"),
+                                            )
+                                        })
+                                        .child(
+                                            div()
+                                                .text_size(px(10.))
+                                                .text_color(muted)
+                                                .child(format!("{}", row + 1)),
+                                        )
+                                },
+                            )),
+                    )
+                    .child(
+                        div()
+                            .px_4()
+                            .py_3()
+                            .flex_shrink_0()
+                            .border_t_1()
+                            .border_color(muted.opacity(0.15))
+                            .text_size(px(11.))
+                            .text_color(muted)
+                            .child("↑ ↓ select · Enter jump · Esc close"),
+                    ),
+            )
     }
 
     fn open_theme_picker(&mut self, cx: &mut Context<Self>) {
         self.help = false;
+        self.dismiss_outline();
         self.theme_picker = Some(ThemePicker {
             original: self.config.theme.clone(),
             presets: ThemePreset::ALL
@@ -812,6 +1113,237 @@ impl Workspace {
         .detach();
     }
 
+    fn accepts_images(&self) -> bool {
+        self.pane == Pane::Editor
+            && !self.help
+            && self.theme_picker.is_none()
+            && self.outline_picker.is_none()
+            && self.command.is_none()
+            && self.documents.current().is_markdown()
+    }
+
+    fn paste_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        let has_images = item
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, ClipboardEntry::Image(_)));
+        if has_images && self.accepts_images() {
+            let inputs = item
+                .into_entries()
+                .filter_map(|entry| match entry {
+                    ClipboardEntry::Image(image) => Some(ImageInput::Bytes(image.bytes)),
+                    ClipboardEntry::String(_) => None,
+                })
+                .collect();
+            self.begin_image_import(inputs, window, cx);
+        } else if let Some(text) = item.text() {
+            self.type_text(&text);
+        } else if has_images {
+            self.message = "Images can only be inserted into a Markdown editor (.md)".into();
+            cx.notify();
+        }
+    }
+
+    /// Common entrypoint for native editor file drops and callers with local paths.
+    pub fn import_image_files(
+        &mut self,
+        paths: &[PathBuf],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.begin_image_import(
+            paths.iter().cloned().map(ImageInput::File).collect(),
+            window,
+            cx,
+        );
+    }
+
+    fn begin_image_import(
+        &mut self,
+        inputs: Vec<ImageInput>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if inputs.is_empty() {
+            return;
+        }
+        if !self.accepts_images() {
+            self.message = "Images can only be inserted into a Markdown editor (.md)".into();
+            cx.notify();
+            return;
+        }
+        if self.dialog_pending {
+            self.message = "Finish the open dialog before inserting images".into();
+            cx.notify();
+            return;
+        }
+        let id = self.documents.active_id();
+        let document = self.documents.current();
+        if document.path.is_some() {
+            if let Err(error) = self.start_image_import(id, inputs, None, cx) {
+                self.message = format!("Image import failed: {error:#}");
+            }
+            cx.notify();
+            return;
+        }
+        let token = document.recovery_token();
+        let caret = (document.buffer.row, document.buffer.col);
+        let receiver = cx.prompt_for_new_path(&self.explorer.directory, Some("Untitled.md"));
+        self.dialog_pending = true;
+        self.message = "Save this document as Markdown to insert images".into();
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                this.dialog_pending = false;
+                let result = match result {
+                    Ok(Ok(Some(path))) => (|| -> Result<()> {
+                        let document = this
+                            .documents
+                            .get(id)
+                            .ok_or_else(|| anyhow::anyhow!("The original document was closed"))?;
+                        if document.path.is_some() || document.recovery_token() != token {
+                            bail!("The original document changed; paste or drop the images again");
+                        }
+                        if !path
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+                        {
+                            bail!("Cannot insert images: choose a Markdown (.md) save path");
+                        }
+                        this.documents.save_id(id, Some(&path))?;
+                        this.start_image_import(id, inputs, Some(caret), cx)
+                    })(),
+                    Ok(Err(error)) => Err(error),
+                    _ => {
+                        this.message = "Image insertion cancelled".into();
+                        cx.notify();
+                        return;
+                    }
+                };
+                if let Err(error) = result {
+                    this.message = format!("Image import failed: {error:#}");
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn start_image_import(
+        &mut self,
+        id: u64,
+        inputs: Vec<ImageInput>,
+        caret: Option<(usize, usize)>,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        let document = self
+            .documents
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("The original document was closed"))?;
+        if !document.is_markdown() {
+            bail!("Images require a Markdown (.md) document");
+        }
+        let path = document
+            .path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Save the document before inserting images"))?
+            .to_path_buf();
+        let token = document.recovery_token();
+        let caret = caret.unwrap_or((document.buffer.row, document.buffer.col));
+        let count = inputs.len();
+        let assets_dir = self.config.image_assets_dir.clone();
+        self.message = format!("Importing {count} image(s)…");
+        cx.notify();
+        let worker_path = path.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { image_assets::import_images(&worker_path, &assets_dir, &inputs) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                let imported = result.is_ok();
+                let result = result.and_then(|text| {
+                    let document = this
+                        .documents
+                        .get(id)
+                        .ok_or_else(|| anyhow::anyhow!("The original document was closed"))?;
+                    // Never insert a stale caret into edited/reloaded contents or
+                    // relative asset links into a document saved under another path.
+                    if document.path.as_ref() != Some(&path) || document.recovery_token() != token {
+                        bail!("The original document changed; paste or drop the images again");
+                    }
+                    this.finish_image_import(id, &text, caret, cx)
+                });
+                this.message = match result {
+                    Ok(()) => format!("Inserted {count} local image(s)"),
+                    Err(error) if imported => {
+                        format!("Imported {count} local image(s); insertion skipped: {error:#}")
+                    }
+                    Err(error) => format!("Image import failed: {error:#}"),
+                };
+                // Copying can succeed even when a concurrent document change
+                // prevents inserting the links. Files still needs the new assets.
+                if imported {
+                    if this.explorer.dirty() {
+                        this.message.push_str(
+                            " · Files refresh deferred: commit or undo pending Files edits, then :e",
+                        );
+                    } else if let Err(error) = this.explorer.reload() {
+                        this.message
+                            .push_str(&format!(" · Files refresh failed: {error:#}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        Ok(())
+    }
+
+    fn finish_image_import(
+        &mut self,
+        id: u64,
+        text: &str,
+        caret: (usize, usize),
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        let active = self.documents.active_id();
+        self.documents.select(id)?;
+        let buffer = &mut self.documents.current_mut().buffer;
+        buffer.row = caret.0;
+        buffer.col = caret.1;
+        let insert_mode = buffer.mode == Mode::Insert;
+        if insert_mode {
+            // Finish preceding typing without moving the source insertion caret.
+            let col = buffer.col;
+            buffer.key("escape");
+            buffer.mode = Mode::Insert;
+            buffer.col = col;
+        }
+        buffer.insert_text(text);
+        if insert_mode {
+            // Isolate the import from both preceding and subsequent Insert typing.
+            let col = buffer.col;
+            buffer.key("escape");
+            buffer.mode = Mode::Insert;
+            buffer.col = col;
+        }
+        self.documents.select(active)?;
+        if active == id {
+            self.marked = None;
+            self.preferred_visual_x = None;
+            self.follow_cursor = true;
+            self.refresh_projection();
+        }
+        self.checkpoint_recovery(cx);
+        Ok(())
+    }
+
     fn save_dialog(
         &mut self,
         id: u64,
@@ -1163,13 +1695,28 @@ impl Workspace {
         }
     }
     fn action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
-        if self.help && action != "help" && action != "themes" {
+        if self.help && !matches!(action, "help" | "themes" | "outline") {
             return Ok(());
         }
         if self.theme_picker.is_some() {
             if action == "themes" {
                 self.finish_theme_picker(false, cx);
             }
+            return Ok(());
+        }
+        if self.outline_picker.is_some()
+            && !matches!(
+                action,
+                "outline"
+                    | "paste"
+                    | "help"
+                    | "themes"
+                    | "previous-buffer"
+                    | "next-buffer"
+                    | "save"
+                    | "save-as"
+            )
+        {
             return Ok(());
         }
         match action {
@@ -1192,8 +1739,12 @@ impl Workspace {
             "explorer" => self.toggle_explorer(cx),
             "terminal" => self.toggle_terminal(cx)?,
             "editor" => self.set_pane(Pane::Editor, cx),
-            "help" => self.help = !self.help,
+            "help" => {
+                self.dismiss_outline();
+                self.help = !self.help;
+            }
             "themes" => self.open_theme_picker(cx),
+            "outline" => self.toggle_outline(cx),
             "previous-buffer" => self.change_document(
                 |documents| {
                     documents.previous();
@@ -1209,11 +1760,7 @@ impl Workspace {
                 cx,
             )?,
             "buffer-delete" => self.close_tab(self.documents.active_id(), window, cx),
-            "paste" => {
-                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                    self.type_text(&text);
-                }
-            }
+            "paste" => self.paste_clipboard(window, cx),
             _ => {}
         }
         self.focus.focus(window);
@@ -1344,6 +1891,7 @@ impl Workspace {
             "ex" | "explorer" => self.set_pane(Pane::Explorer, cx),
             "help" => self.help = true,
             "theme" | "themes" => self.open_theme_picker(cx),
+            "outline" => self.toggle_outline(cx),
             "config" => {
                 let (config, path) = Config::load(self.config_path.as_deref())?;
                 bind_config_keys(&config, cx);
@@ -1367,7 +1915,7 @@ impl Workspace {
         Ok(())
     }
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.theme_picker.is_none() {
+        if self.theme_picker.is_none() && self.outline_picker.is_none() {
             self.follow_cursor = true;
             self.viewport_alignment = None;
         }
@@ -1405,6 +1953,68 @@ impl Workspace {
             self.request_window_close(window, cx);
             return Ok(true);
         }
+        let clipboard_shortcut =
+            crate::keyboard::clipboard_shortcut(stroke, self.pane == Pane::Terminal);
+        if clipboard_shortcut && stroke.key == "v" && !self.help && self.theme_picker.is_none() {
+            self.paste_clipboard(window, cx);
+            return Ok(true);
+        }
+        if self.outline_picker.is_some() {
+            if self.marked.is_some() {
+                return Ok(false);
+            }
+            match key {
+                "escape" => self.dismiss_outline(),
+                "enter" => {
+                    let picker = self.outline_picker.as_ref().unwrap();
+                    if let Some(&index) = picker.matches.get(picker.selected) {
+                        self.jump_to_heading(self.headings[index].row, window, cx);
+                    }
+                }
+                "up" | "down" => {
+                    let picker = self.outline_picker.as_mut().unwrap();
+                    let count = picker.matches.len();
+                    if count > 0 {
+                        picker.selected = if key == "up" {
+                            (picker.selected + count - 1) % count
+                        } else {
+                            (picker.selected + 1) % count
+                        };
+                        picker.scroll.scroll_to_item(picker.selected);
+                    }
+                }
+                "left" | "right" | "home" | "end" | "backspace" | "delete" => {
+                    let picker = self.outline_picker.as_mut().unwrap();
+                    let previous = picker.query[..picker.col]
+                        .grapheme_indices(true)
+                        .next_back()
+                        .map_or(0, |(index, _)| index);
+                    let next = picker.query[picker.col..]
+                        .graphemes(true)
+                        .next()
+                        .map_or(picker.col, |text| picker.col + text.len());
+                    match key {
+                        "left" => picker.col = previous,
+                        "right" => picker.col = next,
+                        "home" => picker.col = 0,
+                        "end" => picker.col = picker.query.len(),
+                        "backspace" => {
+                            picker.query.replace_range(previous..picker.col, "");
+                            picker.col = previous;
+                        }
+                        "delete" => {
+                            picker.query.replace_range(picker.col..next, "");
+                        }
+                        _ => unreachable!(),
+                    }
+                    if matches!(key, "backspace" | "delete") {
+                        self.filter_outline();
+                    }
+                }
+                _ => return Ok(stroke.modifiers.control || stroke.modifiers.platform),
+            }
+            return Ok(true);
+        }
         if let Some(picker) = &self.theme_picker {
             let selected = picker.selected;
             let count = ThemePreset::ALL.len() + 1;
@@ -1425,14 +2035,6 @@ impl Workspace {
                 "left" => self.help_section = (self.help_section + HELP.len() - 1) % HELP.len(),
                 "right" | "tab" => self.help_section = (self.help_section + 1) % HELP.len(),
                 _ => {}
-            }
-            return Ok(true);
-        }
-        let clipboard_shortcut =
-            crate::keyboard::clipboard_shortcut(stroke, self.pane == Pane::Terminal);
-        if clipboard_shortcut && stroke.key == "v" {
-            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                self.type_text(&text);
             }
             return Ok(true);
         }
@@ -1693,6 +2295,10 @@ impl Workspace {
         if self.help || self.theme_picker.is_some() {
             return;
         }
+        if self.outline_picker.is_some() {
+            self.replace_input(None, text);
+            return;
+        }
         self.preferred_visual_x = None;
         if let Some(command) = &mut self.command {
             command.push_str(&text.replace(['\r', '\n'], ""));
@@ -1817,6 +2423,55 @@ impl Workspace {
         let hit = self.layouts[pane.index()].rows.iter().find(|row| {
             event.position.y >= row.origin.y && event.position.y < row.origin.y + row.height
         });
+        if pane == Pane::Editor
+            && self.documents.current().is_markdown()
+            && (event.modifiers.platform || event.modifiers.control)
+        {
+            let link = self.layouts[pane.index()]
+                .links
+                .iter()
+                .find(|link| link.bounds.contains(&event.position))
+                .map(|link| link.url.as_str())
+                .or_else(|| {
+                    let row = hit.filter(|row| !row.raw)?;
+                    let projection = self.projection.get(row.source_row)?;
+                    let mut offset = 0;
+                    for span in &projection.spans {
+                        let start = offset;
+                        offset += span.text.len();
+                        let Some(url) = span.link.as_deref() else {
+                            continue;
+                        };
+                        for (index, character) in span.text.char_indices() {
+                            let index = start + index;
+                            let origin = row.position_for_index(index);
+                            let width = row.line.x_for_index(index + character.len_utf8())
+                                - row.line.x_for_index(index);
+                            if Bounds::new(origin, size(width, row.line_height))
+                                .contains(&event.position)
+                            {
+                                return Some(url);
+                            }
+                        }
+                    }
+                    None
+                });
+            if let Some(link) = link {
+                if link.starts_with('#') {
+                    if let Some(row) = outline::resolve_anchor(&self.headings, link) {
+                        self.jump_to_heading(row, window, cx);
+                    } else {
+                        self.message = format!("No heading matches {link}");
+                    }
+                } else {
+                    self.message =
+                        "Only #fragment links within this document are navigated.".into();
+                }
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+        }
         let task = hit.and_then(|row| {
             if pane != Pane::Editor
                 || !self.documents.current().is_markdown()
@@ -2115,11 +2770,13 @@ impl Workspace {
         let foreground = self.color(&self.config.theme.foreground);
         div()
             .id(action)
-            .w(px(30.))
+            .debug_selector(move || action.into())
+            .w(px(if action == "outline" { 82. } else { 30. }))
             .h(px(26.))
             .flex()
             .items_center()
             .justify_center()
+            .gap_1()
             .rounded_md()
             .flex_shrink_0()
             .cursor_pointer()
@@ -2152,6 +2809,12 @@ impl Workspace {
                         let p = |x, y| bounds.origin + point(px(x), px(y));
                         let mut path = PathBuilder::stroke(px(1.5));
                         match action {
+                            "outline" => {
+                                for (indent, y) in [(2., 5.), (6., 10.), (6., 15.)] {
+                                    path.move_to(p(indent, y));
+                                    path.line_to(p(18., y));
+                                }
+                            }
                             "terminal" => {
                                 path.move_to(p(2., 3.));
                                 path.line_to(p(18., 3.));
@@ -2196,6 +2859,7 @@ impl Workspace {
                 )
                 .size(px(20.)),
             )
+            .when(action == "outline", |button| button.child("Outline"))
     }
     fn surface(&self, pane: Pane, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -2222,6 +2886,33 @@ impl Workspace {
                 cx.listener(|this, _, _, _| this.mouse_anchor = None),
             )
             .on_scroll_wheel(cx.listener(move |this, event, _, cx| this.scroll(pane, event, cx)))
+            .when(pane == Pane::Editor, |surface| {
+                surface.on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                    if !this.help
+                        && this.theme_picker.is_none()
+                        && this.outline_picker.is_none()
+                        && this.command.is_none()
+                    {
+                        this.set_pane(Pane::Editor, cx);
+                        let buffer = &this.documents.current().buffer;
+                        let previous = (buffer.row, buffer.col);
+                        if this.accepts_images()
+                            && let Some((row, col)) =
+                                this.mouse_location(Pane::Editor, window.mouse_position())
+                        {
+                            let buffer = &mut this.documents.current_mut().buffer;
+                            buffer.row = row;
+                            buffer.col = col;
+                        }
+                        this.import_image_files(paths.paths(), window, cx);
+                        let buffer = &mut this.documents.current_mut().buffer;
+                        // The async request captured the drop caret. Leave the
+                        // live caret alone until a successful insertion completes.
+                        buffer.row = previous.0;
+                        buffer.col = previous.1;
+                    }
+                }))
+            })
             .child(Surface {
                 workspace: cx.entity(),
                 pane,
@@ -2314,6 +3005,9 @@ impl Render for Workspace {
             )
             .on_action(cx.listener(|this, _: &ThemesToggle, window, cx| {
                 this.run_action("themes", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &OutlineToggle, window, cx| {
+                this.run_action("outline", window, cx)
             }))
             .on_action(cx.listener(|this, _: &PreviousBuffer, window, cx| {
                 this.run_action("previous-buffer", window, cx)
@@ -2570,6 +3264,12 @@ impl Render for Workspace {
                             .child(div().size(px(8.)).rounded_full().bg(accent))
                             .child("Theme"),
                     )
+                    .child(self.dock_button(
+                        "Outline",
+                        "outline",
+                        self.outline_picker.is_some(),
+                        cx,
+                    ))
                     .when(self.terminal_visible, |footer| {
                         footer.child(self.dock_button("Hide Terminal", "terminal", true, cx))
                     })
@@ -2584,6 +3284,9 @@ impl Render for Workspace {
             .when(self.help, |root| root.child(self.help_panel(cx)))
             .when(self.theme_picker.is_some(), |root| {
                 root.child(self.theme_selector(cx))
+            })
+            .when(self.outline_picker.is_some(), |root| {
+                root.child(self.outline_panel(cx))
             })
     }
 }
@@ -2673,6 +3376,14 @@ const HELP: &[HelpSection] = &[
             ("zz / zt", "Center the current line / align it to the top"),
             ("/text · n", "Find text; repeat the search"),
             ("Ctrl-W h / l / j", "Focus the editor / Files / terminal"),
+            (
+                "Ctrl/Cmd-Shift-O · :outline",
+                "Search document headings; ↑/↓ selects, Enter jumps, Esc closes",
+            ),
+            (
+                "Ctrl/Cmd-click a preview link",
+                "Jump to a #fragment in this document; external links stay closed",
+            ),
         ],
         notes: &[
             "Click to place the caret, double-click to select a word, or drag to select text. The mouse wheel scrolls. Wrapped prose stays editable; Insert-mode Up/Down follows visual rows.",
@@ -2732,6 +3443,8 @@ const HELP: &[HelpSection] = &[
         notes: &[
             "Live preview applies to .md files (case-insensitive) and untitled buffers. Inactive lines render; the cursor line exposes editable syntax. Other files remain literal text. Save As updates the preview type.",
             "Prose wraps automatically. Local images default to 60% of the pane width; remote images remain linked alt text without network requests.",
+            "Paste PNG/JPEG/GIF/WebP images with Cmd-V or Ctrl-Shift-V, or drop image files into the editor. Untitled documents ask for Save As first; assets are copied beside the document using image_assets_dir (default assets).",
+            "Image imports are one undoable edit. Undo removes links, not shared asset files; Save writes the Markdown. Missing local images show a repair hint. No images are uploaded or fetched.",
             "Markdown styling supports headings, emphasis, code, lists, tasks, tables, and quotes. Your document stays plain UTF-8 text on disk.",
         ],
     },
@@ -2800,6 +3513,9 @@ fn utf16_offset(text: &str, utf8: usize) -> usize {
 
 impl Workspace {
     fn input_text(&self) -> &str {
+        if let Some(picker) = &self.outline_picker {
+            return &picker.query;
+        }
         if self.pane == Pane::Terminal {
             ""
         } else if let Some(command) = &self.command {
@@ -2809,6 +3525,9 @@ impl Workspace {
         }
     }
     fn input_col(&self) -> usize {
+        if let Some(picker) = &self.outline_picker {
+            return picker.col;
+        }
         if self.pane == Pane::Terminal {
             0
         } else {
@@ -2817,6 +3536,20 @@ impl Workspace {
     }
     fn replace_input(&mut self, range: Option<Range<usize>>, text: &str) {
         if self.help || self.theme_picker.is_some() {
+            return;
+        }
+        if let Some(picker) = &mut self.outline_picker {
+            let range = range
+                .or_else(|| self.marked.clone())
+                .map(|range| {
+                    utf8_offset(&picker.query, range.start)..utf8_offset(&picker.query, range.end)
+                })
+                .unwrap_or(picker.col..picker.col);
+            let text = text.replace(['\r', '\n'], "");
+            picker.col = range.start + text.len();
+            picker.query.replace_range(range, &text);
+            self.marked = None;
+            self.filter_outline();
             return;
         }
         if self.pane == Pane::Terminal {
@@ -2883,7 +3616,8 @@ impl EntityInputHandler for Workspace {
         _: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         if self.help
-            || (self.command.is_none()
+            || (self.outline_picker.is_none()
+                && self.command.is_none()
                 && self.pane != Pane::Terminal
                 && self.buffer().mode != Mode::Insert)
         {
@@ -2937,6 +3671,20 @@ impl EntityInputHandler for Workspace {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if let Some(picker) = &self.outline_picker {
+            let line = picker.input_line.as_ref()?;
+            let shift = (line.x_for_index(picker.col) - picker.input_bounds.size.width + px(3.))
+                .max(px(0.));
+            let start = utf8_offset(&picker.query, range.start);
+            return Some(
+                Bounds::new(
+                    picker.input_bounds.origin
+                        + point((line.x_for_index(start) - shift).max(px(0.)), px(0.)),
+                    size(px(2.), px(30.)),
+                )
+                .intersect(&picker.input_bounds),
+            );
+        }
         let row = self.layouts[self.pane.index()]
             .rows
             .iter()
@@ -2956,6 +3704,13 @@ impl EntityInputHandler for Workspace {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<usize> {
+        if let Some(picker) = &self.outline_picker {
+            let line = picker.input_line.as_ref()?;
+            let shift = (line.x_for_index(picker.col) - picker.input_bounds.size.width + px(3.))
+                .max(px(0.));
+            let index = line.closest_index_for_x(position.x - picker.input_bounds.origin.x + shift);
+            return Some(utf16_offset(&picker.query, index));
+        }
         let row = self.layouts[self.pane.index()]
             .rows
             .iter()
