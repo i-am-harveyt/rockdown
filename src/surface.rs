@@ -1,5 +1,6 @@
 use crate::app::{Pane, Workspace};
 use crate::{
+    image_assets::local_image_path,
     markdown::{BlockKind, RenderedLine, Span, TableRow},
     vim::Mode,
 };
@@ -9,6 +10,7 @@ use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex},
+    time::SystemTime,
 };
 
 /// Default inline-image width as a share of the editor pane. Overridable per
@@ -23,8 +25,16 @@ const MAX_PREVIEW_DIMENSION: u32 = 1600;
 /// Maximum number of decoded image bitmaps retained in memory simultaneously.
 const MAX_CACHED_IMAGES: usize = 24;
 
+type ImageStamp = Option<(Option<SystemTime>, u64)>;
+type LoadedImage = Result<Arc<RenderImage>, &'static str>;
+
+struct CachedImage {
+    stamp: ImageStamp,
+    image: LoadedImage,
+}
+
 struct ImageCache {
-    entries: HashMap<PathBuf, Option<Arc<RenderImage>>>,
+    entries: HashMap<PathBuf, CachedImage>,
     lru: VecDeque<PathBuf>,
 }
 
@@ -36,19 +46,19 @@ impl ImageCache {
         }
     }
 
-    fn get(&mut self, path: &Path) -> Option<Option<Arc<RenderImage>>> {
-        if let Some(image) = self.entries.get(path) {
+    fn get(&mut self, path: &Path, stamp: ImageStamp) -> Option<LoadedImage> {
+        if let Some(image) = self.entries.get(path).filter(|entry| entry.stamp == stamp) {
             if let Some(pos) = self.lru.iter().position(|p| p == path) {
                 self.lru.remove(pos);
             }
             self.lru.push_back(path.to_path_buf());
-            Some(image.clone())
+            Some(image.image.clone())
         } else {
             None
         }
     }
 
-    fn insert(&mut self, path: PathBuf, image: Option<Arc<RenderImage>>) {
+    fn insert(&mut self, path: PathBuf, stamp: ImageStamp, image: LoadedImage) {
         if self.entries.contains_key(&path) {
             if let Some(pos) = self.lru.iter().position(|p| p == &path) {
                 self.lru.remove(pos);
@@ -61,7 +71,7 @@ impl ImageCache {
             }
         }
         self.lru.push_back(path.clone());
-        self.entries.insert(path, image);
+        self.entries.insert(path, CachedImage { stamp, image });
     }
 }
 
@@ -70,25 +80,30 @@ impl ImageCache {
 // cache only saves repeated decoding of the same file.
 static IMAGES: LazyLock<Mutex<ImageCache>> = LazyLock::new(|| Mutex::new(ImageCache::new()));
 
-fn load_image(path: &Path) -> Option<Arc<RenderImage>> {
-    let mut cache = IMAGES.lock().ok()?;
-    if let Some(cached) = cache.get(path) {
+fn load_image(path: &Path) -> LoadedImage {
+    let stamp = std::fs::metadata(path)
+        .ok()
+        .map(|metadata| (metadata.modified().ok(), metadata.len()));
+    let mut cache = IMAGES
+        .lock()
+        .map_err(|_| "Image cache unavailable; reopen the document")?;
+    if let Some(cached) = cache.get(path, stamp) {
         return cached;
     }
     let decoded = std::fs::File::open(path)
-        .ok()
-        .and_then(|file| {
-            let reader = std::io::BufReader::new(file);
-            image::ImageReader::new(reader)
-                .with_guessed_format()
-                .ok()?
-                .decode()
-                .ok()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "Missing local image; restore the file or update its path"
+            } else {
+                "Cannot read local image; check its path and permissions"
+            }
         })
-        .or_else(|| {
-            std::fs::read(path)
-                .ok()
-                .and_then(|bytes| image::load_from_memory(&bytes).ok())
+        .and_then(|file| {
+            image::ImageReader::new(std::io::BufReader::new(file))
+                .with_guessed_format()
+                .map_err(|_| "Cannot read local image; check its permissions")?
+                .decode()
+                .map_err(|_| "Unsupported or damaged local image; use PNG, JPEG, GIF, or WebP")
         })
         .map(|image| {
             let image = if image.width() > MAX_PREVIEW_DIMENSION
@@ -105,7 +120,7 @@ fn load_image(path: &Path) -> Option<Arc<RenderImage>> {
             }
             Arc::new(RenderImage::new(vec![image::Frame::new(rgba)]))
         });
-    cache.insert(path.to_path_buf(), decoded.clone());
+    cache.insert(path.to_path_buf(), stamp, decoded.clone());
     decoded
 }
 
@@ -732,11 +747,50 @@ impl Element for Surface {
                         .unwrap_or(&app.explorer.directory);
                     for image in &app.projection[source_row].images {
                         // Remote images remain linked alt text: opening a document never phones home.
-                        if image.url.contains("://") {
+                        let Some(path) = local_image_path(base, &image.url) else {
                             continue;
-                        }
-                        let Some(bitmap) = load_image(&base.join(&image.url)) else {
-                            continue;
+                        };
+                        let bitmap = match load_image(&path) {
+                            Ok(bitmap) => bitmap,
+                            Err(message) => {
+                                let label = format!("{message}: {}", image.url);
+                                let runs = [run(&label, font.clone(), muted)];
+                                let shaped = window.text_system().shape_line(
+                                    label.into(),
+                                    px(app.config.font_size),
+                                    &runs,
+                                    None,
+                                );
+                                let wrapped = window
+                                    .text_system()
+                                    .shape_text(
+                                        shaped.text.clone(),
+                                        px(app.config.font_size),
+                                        &runs,
+                                        Some(available),
+                                        None,
+                                    )
+                                    .map(|mut lines| lines.pop())
+                                    .unwrap_or_else(|error| {
+                                        eprintln!("Wrapping image error: {error}");
+                                        None
+                                    });
+                                let height = px(line_height)
+                                    * wrapped
+                                        .as_ref()
+                                        .map_or(1, |line| line.wrap_boundaries.len() + 1)
+                                        as f32;
+                                result.text.push(DrawText {
+                                    line: shaped,
+                                    wrapped,
+                                    origin: point(origin.x, y + row_height),
+                                    height: px(line_height),
+                                    clip: None,
+                                    align: TextAlign::Left,
+                                });
+                                row_height += height;
+                                continue;
+                            }
                         };
                         // Width-driven sizing: default 60% of the pane width, with a
                         // per-image override from the title (`![alt](pic.png "40%")`

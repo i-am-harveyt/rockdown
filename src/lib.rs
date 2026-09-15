@@ -3,6 +3,7 @@ pub mod config;
 pub mod document;
 pub mod documents;
 pub mod explorer;
+pub mod image_assets;
 pub mod keyboard;
 pub mod markdown;
 mod markdown_edit;
