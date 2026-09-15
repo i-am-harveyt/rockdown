@@ -15,6 +15,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const NATIVE_PASTE: &str = if cfg!(target_os = "macos") {
+    "cmd-v"
+} else {
+    "ctrl-v"
+};
+
 fn png() -> Vec<u8> {
     let mut bytes = Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
@@ -42,8 +48,8 @@ fn editor(
     };
     let (view, window) = cx.add_window_view(|window, cx| {
         let mut config = Config::default();
-        // Cmd-V exercises the direct handler; Ctrl-Shift-V still exercises Paste action.
-        config.keys.remove("cmd-v");
+        // Exercise native paste directly; Ctrl-Shift-V still uses the Paste action.
+        config.keys.remove(NATIVE_PASTE);
         Workspace::new(
             config,
             None,
@@ -140,7 +146,7 @@ fn direct_clipboard_shortcut_isolates_image_from_insert_typing(cx: &mut TestAppC
     window.simulate_keystrokes("i");
     window.simulate_input("before ");
     put_image(&mut window);
-    window.simulate_keystrokes("cmd-v");
+    window.simulate_keystrokes(NATIVE_PASTE);
     window.run_until_parked();
     let inserted = text(&mut window, &view);
     assert!(inserted.starts_with("before !["));
@@ -454,9 +460,10 @@ fn direct_paste_keeps_outline_text_literal_and_rejects_images(cx: &mut TestAppCo
     let (dir, mut window, view) = editor(cx, source, Some("md"));
     window.simulate_keystrokes("cmd-shift-o");
     put_image(&mut window);
-    window.simulate_keystrokes("cmd-v");
+    window.simulate_keystrokes(NATIVE_PASTE);
     window.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("中文".into())));
-    window.simulate_keystrokes("cmd-v enter");
+    window.simulate_keystrokes(NATIVE_PASTE);
+    window.simulate_keystrokes("enter");
     window.update(|_, cx| {
         let buffer = &view.read(cx).documents.current().buffer;
         assert_eq!(buffer.row, 1);
