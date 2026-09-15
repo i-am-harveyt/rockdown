@@ -4,6 +4,7 @@ use crate::{
     document::Document,
     explorer::Explorer,
     markdown::{self, RenderedLine},
+    recovery::RecoveryStore,
     terminal::{Terminal, key_bytes},
     vim::{Buffer, Mode},
 };
@@ -96,6 +97,10 @@ pub struct Workspace {
     pub terminal: Option<Terminal>,
     pub terminal_visible: bool,
     terminal_task: Option<Task<()>>,
+    recovery: Option<RecoveryStore>,
+    recovery_task: Option<Task<()>>,
+    recovery_error: Option<String>,
+    pub(crate) viewport_needs_measurement: bool,
     pub pane: Pane,
     pub focus: FocusHandle,
     pub layouts: [SurfaceLayout; 3],
@@ -147,6 +152,10 @@ impl Workspace {
             terminal: None,
             terminal_visible: false,
             terminal_task: None,
+            recovery: None,
+            recovery_task: None,
+            recovery_error: None,
+            viewport_needs_measurement: false,
             pane: Pane::Editor,
             focus,
             layouts: Default::default(),
@@ -172,6 +181,100 @@ impl Workspace {
             pane_heights: [0.; 3],
             viewport_alignment: None,
         }
+    }
+
+    /// Opt in only at real application startup; ordinary workspaces stay storage-free.
+    pub fn initialize_recovery(
+        &mut self,
+        store: Option<RecoveryStore>,
+        error: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let editor = Pane::Editor.index();
+        self.tops[editor] = self.documents.viewport().top;
+        self.scroll_offsets[editor] = self.documents.viewport().offset;
+        self.follow_cursor = false;
+        self.viewport_needs_measurement = true;
+        self.recovery = store;
+        self.recovery_error = error;
+        if self.recovery.is_none() {
+            return;
+        }
+        // A platform quit cannot be cancelled here. Preserve edits rather than
+        // treating an unconfirmed quit as permission to discard them.
+        cx.on_app_quit(|this, cx| {
+            this.checkpoint_recovery(cx);
+            async {}
+        })
+        .detach();
+        self.recovery_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let running = this
+                    .update(cx, |this, cx| {
+                        this.checkpoint_recovery(cx);
+                        this.recovery.is_some()
+                    })
+                    .unwrap_or(false);
+                if !running {
+                    break;
+                }
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+            }
+        }));
+    }
+
+    fn capture_viewport(&mut self) {
+        let editor = Pane::Editor.index();
+        *self.documents.viewport_mut() = crate::documents::Viewport {
+            top: self.tops[editor],
+            offset: self.scroll_offsets[editor],
+        };
+    }
+
+    fn checkpoint_recovery(&mut self, cx: &mut Context<Self>) {
+        if self.recovery.is_none() {
+            return;
+        }
+        self.capture_viewport();
+        match self.recovery.as_ref().unwrap().checkpoint(&self.documents) {
+            Ok(()) => {
+                if self.recovery_error.take().is_some() {
+                    cx.notify();
+                }
+            }
+            Err(error) => {
+                let message = format!(
+                    "Recovery checkpoint failed: {error:#}. Save with :w or Save As; check recovery-folder permissions and free space. Retrying every 2 seconds."
+                );
+                if self.recovery_error.as_ref() != Some(&message) {
+                    eprintln!("rockdown: {message}");
+                    self.recovery_error = Some(message);
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    fn finish_recovery(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.recovery.is_none() {
+            return true;
+        }
+        self.capture_viewport();
+        if let Err(error) = self.recovery.as_ref().unwrap().finish(&self.documents) {
+            let message = format!(
+                "Close cancelled: recovery session could not be finalized: {error:#}. Check recovery-folder permissions and free space, then close again."
+            );
+            eprintln!("rockdown: {message}");
+            self.message = message.clone();
+            self.recovery_error = Some(message);
+            cx.notify();
+            return false;
+        }
+        // Stop periodic/shutdown checkpoints before they can revive discarded edits.
+        self.recovery_task = None;
+        self.recovery = None;
+        self.recovery_error = None;
+        true
     }
     pub fn color(&self, value: &str) -> Hsla {
         rgb(parse_color(value).expect("validated theme")).into()
@@ -646,10 +749,7 @@ impl Workspace {
     ) -> Result<()> {
         let editor = Pane::Editor.index();
         let previous = self.documents.active_id();
-        *self.documents.viewport_mut() = crate::documents::Viewport {
-            top: self.tops[editor],
-            offset: self.scroll_offsets[editor],
-        };
+        self.capture_viewport();
         if let Err(error) = change(&mut self.documents) {
             self.documents.select(previous)?;
             return Err(error);
@@ -658,6 +758,7 @@ impl Workspace {
         self.layouts[editor] = SurfaceLayout::default();
         self.tops[editor] = self.documents.viewport().top;
         self.scroll_offsets[editor] = self.documents.viewport().offset;
+        self.viewport_needs_measurement = true;
         self.set_pane(Pane::Editor, cx);
         self.follow_cursor = false;
         self.message = format!(
@@ -665,6 +766,7 @@ impl Workspace {
             self.documents.active_id(),
             self.documents.entries().len()
         );
+        self.checkpoint_recovery(cx);
         Ok(())
     }
     pub fn can_close(&mut self, cx: &mut Context<Self>) -> bool {
@@ -846,7 +948,7 @@ impl Workspace {
         let Some((id, snapshot, name)) = pending else {
             if let Some(id) = target {
                 self.delete_tab(id, window, cx);
-            } else {
+            } else if self.finish_recovery(cx) {
                 window.remove_window();
             }
             return;
@@ -1184,7 +1286,11 @@ impl Workspace {
             "q" => {
                 self.request_window_close(window, cx);
             }
-            "q!" => window.remove_window(),
+            "q!" => {
+                if self.finish_recovery(cx) {
+                    window.remove_window();
+                }
+            }
             "bp" | "bprevious" | "previous-buffer" => self.change_document(
                 |documents| {
                     documents.previous();
@@ -2384,6 +2490,22 @@ impl Render for Workspace {
                                 .min_h_0()
                                 .child(self.surface(Pane::Terminal, cx)),
                         ),
+                )
+            })
+            .when_some(self.recovery_error.clone(), |root, error| {
+                root.child(
+                    div()
+                        .id("recovery-error")
+                        .debug_selector(|| "recovery-error".into())
+                        .flex_shrink_0()
+                        .px_3()
+                        .py_2()
+                        .bg(panel)
+                        .border_t_1()
+                        .border_color(accent)
+                        .text_color(foreground)
+                        .text_size(px(12.))
+                        .child(error),
                 )
             })
             .child(

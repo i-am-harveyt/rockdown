@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, bail};
 use gpui::{prelude::*, *};
-use rockdown::{config::Config, document::Document, documents::Documents, explorer::Explorer};
+use rockdown::{
+    config::Config, document::Document, documents::Documents, explorer::Explorer,
+    recovery::RecoveryStore,
+};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -102,7 +105,73 @@ fn run() -> Result<()> {
         );
         return Ok(());
     }
-    let (documents, explorer) = cli.prepare(&std::env::current_dir()?)?;
+    let cwd = std::env::current_dir()?;
+    let (mut documents, explorer) = cli.prepare(&cwd)?;
+    // A directory session and each ordered, normalized explicit-file invocation
+    // have separate recovery scopes. Reopening `rockdown a.md b.md` restores only
+    // that invocation's tabs, never the directory session or another file list.
+    let restore_session =
+        cli.paths.is_empty() || (cli.paths.len() == 1 && cwd.join(&cli.paths[0]).is_dir());
+    let mut recovery_error = None;
+    let mut restored = false;
+    let store = if restore_session {
+        RecoveryStore::acquire(&explorer.directory)
+    } else {
+        RecoveryStore::acquire_explicit(
+            &explorer.directory,
+            documents
+                .entries()
+                .iter()
+                .filter_map(|entry| entry.document.path.as_deref()),
+        )
+    };
+    let recovery = match store {
+        Ok(store) => match store.load().and_then(|session| {
+            let Some(mut session) = session else {
+                return Ok(None);
+            };
+            if !restore_session {
+                // Explicit paths remain present even if closed in the old session.
+                let active = session.active_id();
+                for entry in documents.entries() {
+                    if let Some(path) = entry.document.path.as_deref()
+                        && !session
+                            .entries()
+                            .iter()
+                            .any(|entry| entry.document.path.as_deref() == Some(path))
+                    {
+                        session.open(path)?;
+                    }
+                }
+                session.select(active)?;
+            }
+            Ok(Some(session))
+        }) {
+            Ok(session) => {
+                if let Some(session) = session {
+                    documents = session;
+                    restored = true;
+                }
+                Some(store)
+            }
+            Err(error) => {
+                // Do not retain a writable store after a corrupt/unreadable load.
+                recovery_error = Some(format!(
+                    "Recovery disabled: {error:#}. Save edits with :w or Save As. Preserve the recovery snapshot, then repair or move it aside before restarting."
+                ));
+                None
+            }
+        },
+        Err(error) => {
+            recovery_error = Some(format!(
+                "Recovery disabled: {error:#}. Save edits with :w or Save As. Close any other Rockdown window for this workspace, check recovery-folder permissions, then restart."
+            ));
+            None
+        }
+    };
+    if let Some(error) = &recovery_error {
+        eprintln!("rockdown: {error}");
+    }
     Application::new().run(move |cx: &mut App| {
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
@@ -135,6 +204,12 @@ fn run() -> Result<()> {
                     workspace.explorer_visible = documents.current().path.is_none();
                     workspace.documents = documents;
                     workspace.refresh_projection();
+                    workspace.initialize_recovery(recovery, recovery_error, cx);
+                    if restored {
+                        workspace.message =
+                            "Restored previous session · recovered edits remain unsaved until :w"
+                                .into();
+                    }
                     workspace
                 });
                 let weak = workspace.downgrade();

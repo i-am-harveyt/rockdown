@@ -8,6 +8,7 @@ A lightweight, native Markdown editor built with **Rust and GPUI**. Write in pla
 - **Live-preview Markdown:** headings, emphasis, code, lists, task lists, tables, quotes, wrapped prose, and local images.
 - **Vim-style editing:** Normal, Insert, and Visual modes; motions, counts, operators, search, and undo/redo.
 - **Multiple buffers:** switch between documents without losing unsaved text, cursor position, viewport, or undo history.
+- **Local recovery:** private crash-recovery checkpoints preserve unsaved drafts; reopening the same session restores tabs, the active document, cursor, and viewport without automatically saving Markdown files.
 - **Right-hand file explorer:** rename, create, and stage deletions by editing filenames as buffer lines. Hide the dock or drag its left edge to resize it.
 - **Embedded terminal:** a real PTY shell with color support, keyboard input, and resizing.
 - **TOML configuration:** customize fonts, colors, dock dimensions, shell, and shortcuts.
@@ -224,6 +225,36 @@ Saves check for external file changes instead of silently overwriting them. If a
 
 Existing LF or CRLF line endings and UTF-8 BOMs are preserved when saving. Editing and clipboard paste use normalized newlines internally. New documents without an existing newline style use CRLF on Windows and LF elsewhere. Mixed-ending files are normalized to the first newline's style on save.
 
+### Recovery and restart
+
+Rockdown checkpoints open documents to private, per-user recovery storage at startup,
+every two seconds, and after document switches. A crash can lose changes since the
+last successful checkpoint. These snapshots **never overwrite your Markdown files**
+and are not a replacement for backups or explicit Save.
+
+- Opening a directory (or launching without file arguments) resumes that directory's session.
+- Explicit file arguments use a separate session keyed by the ordered, resolved file paths
+  and startup directory. Repeating that invocation restores its drafts and tabs without
+  replacing an unrelated directory session; requested files remain open.
+- Dirty named and untitled drafts recover their text. Previously saved, unchanged tabs
+  reload the current disk version. Recovered edits retain the original disk baseline,
+  so external changes still cause a save conflict rather than being silently overwritten.
+- Confirmed close/Discard and `:q!` remove discarded draft contents from recovery.
+  Saved file tabs reopen from disk next time; untitled and never-saved tabs are omitted.
+  Cancelling a close keeps drafts recoverable.
+- Cursor and viewport resume with valid bounds. Editor mode resumes in Normal mode;
+  undo history, selections, registers, terminal sessions, and staged Files operations
+  are not restored.
+
+Storage is `~/Library/Application Support/rockdown/recovery` on macOS,
+`$XDG_STATE_HOME/rockdown/recovery` (or `~/.local/state/rockdown/recovery`) on Linux,
+and `%LOCALAPPDATA%\\rockdown\\recovery` on Windows. Snapshots are private local files,
+not encrypted. Only one running instance may own a given recovery session.
+If recovery is unavailable, a persistent banner explains the failure; explicit Save
+still works. Corrupt snapshots are left untouched, with recovery disabled for that
+launch. A failed final checkpoint cancels close rather than leaving discarded text
+eligible for recovery.
+
 ## Buffer management
 
 An **editor buffer** is an open document, not a file explorer entry. Closing a buffer never deletes its file from disk.
@@ -435,7 +466,7 @@ Use `:config` to reload settings in the app. A changed shell setting applies to 
 - Markdown rendering is line-based live preview, not a separate rich-text document format.
 - Local images render in place. Remote image URLs remain alt text; opening a document does not fetch them over the network.
 - Files must be UTF-8. The explorer rejects filenames it cannot represent safely as individual text lines.
-- There is no automatic document save or restoration of open buffers across application restarts.
+- Recovery is separate from saving: Markdown files are never automatically saved. Checkpoints are periodic, and undo history and staged filesystem operations do not survive a restart.
 
 ## Development checks
 

@@ -800,6 +800,25 @@ impl Element for Surface {
                     .update(cx, |app, _| app.tops[self.pane.index()] = row);
                 continue;
             }
+            // Restored offsets were measured at a potentially different window
+            // width or document version. Validate against the real first row,
+            // including wrapping and images, rather than a guessed line height.
+            if self.pane == Pane::Editor && app.viewport_needs_measurement {
+                let height = result.layout.rows.first().map(|row| f32::from(row.height));
+                let realign = self.workspace.update(cx, |app, _| {
+                    app.viewport_needs_measurement = false;
+                    let offset = &mut app.scroll_offsets[Pane::Editor.index()];
+                    if height.is_some_and(|height| *offset >= height) {
+                        *offset = 0.;
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if realign {
+                    continue;
+                }
+            }
             result.images = images;
             let realign = self.workspace.update(cx, |app, _| {
                 if !app.viewport_is_aligned(self.pane) {
