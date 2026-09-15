@@ -25,7 +25,7 @@ Markdown uses a maximum column width of 820 logical pixels, shrinking to fit sma
 - On macOS, Xcode Command Line Tools. Install them with `xcode-select --install` if needed.
 - On Windows, Windows 10 version 1809 or newer (or Windows 11), the Rust MSVC toolchain, and Visual Studio Build Tools with **Desktop development with C++** and a Windows 10/11 SDK. The SDK provides GPUI's `fxc.exe` shader compiler.
 
-**Platform status:** development and native-window verification have been performed on macOS Apple Silicon. Windows support uses GPUI's native backend, ConPTY for the embedded terminal, and Windows filesystem operations for explorer commits. CI is configured to test and build Windows x64 and macOS; native Windows UI behavior has not been verified on this development machine. Linux builds and UI behavior also remain unverified here and may require additional GPUI system dependencies and an installed monospace font.
+**Platform status:** development and native-window verification have been performed on macOS Apple Silicon. Windows support uses GPUI's native backend, ConPTY for the embedded terminal, and Windows filesystem operations for explorer commits. CI tests and builds Windows x64 only, and automated releases publish only the Windows x64 archive. macOS builds remain available locally, including app packaging with `scripts/bundle-macos.sh`; macOS CI and automated releases are disabled. Native Windows UI behavior has not been verified on this development machine. Linux builds and UI behavior also remain unverified here and may require additional GPUI system dependencies and an installed monospace font.
 
 The macOS build enables GPUI's runtime shader compilation, so a separate Xcode Metal compiler toolchain is not required.
 

@@ -29,23 +29,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS Apple Silicon (ARM64)
-          - os: macos-15
-            target: aarch64-apple-darwin
-            artifact_name: rockdown-macos-aarch64.zip
-            use_app_bundle: true
-
-          # macOS Intel (x86_64)
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            artifact_name: rockdown-macos-x86_64.zip
-            use_app_bundle: true
-
           # Windows 64-bit
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: rockdown-windows-x64.zip
-            use_app_bundle: false
 
     steps:
       - name: Checkout code
@@ -65,11 +52,9 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Initialize MSVC and Windows SDK
-        if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Locate Windows shader compiler
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $fxc = Join-Path $env:WindowsSdkVerBinPath 'x64\fxc.exe'
@@ -77,64 +62,13 @@ jobs:
           "GPUI_FXC_PATH=$fxc" >> $env:GITHUB_ENV
 
       - name: Test Windows build
-        if: runner.os == 'Windows'
         run: cargo test --locked --all-targets --target ${{ matrix.target }}
 
       - name: Build release binary
-        if: runner.os == 'Windows'
         run: cargo build --locked --release --target ${{ matrix.target }}
-
-      # All six secrets are required together. With none, produce ad-hoc signed builds.
-      - name: Configure macOS signing and notarization
-        if: matrix.use_app_bundle
-        env:
-          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: |
-          if [[ -z "${APPLE_CERTIFICATE_P12}${APPLE_CERTIFICATE_PASSWORD}${APPLE_SIGNING_IDENTITY}${APPLE_ID}${APPLE_TEAM_ID}${APPLE_APP_SPECIFIC_PASSWORD}" ]]; then
-            echo '::warning::Apple signing secrets are absent. Downloads will not be Gatekeeper-approved.'
-            exit 0
-          fi
-          : "${APPLE_CERTIFICATE_P12:?Missing certificate}"
-          : "${APPLE_CERTIFICATE_PASSWORD:?Missing certificate password}"
-          : "${APPLE_SIGNING_IDENTITY:?Missing Developer ID Application identity}"
-          : "${APPLE_ID:?Missing Apple ID}"
-          : "${APPLE_TEAM_ID:?Missing team ID}"
-          : "${APPLE_APP_SPECIFIC_PASSWORD:?Missing app-specific password}"
-          KEYCHAIN_PATH="$RUNNER_TEMP/rockdown-signing.keychain-db"
-          KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
-          echo "::add-mask::$KEYCHAIN_PASSWORD"
-          printf '%s' "$APPLE_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          xcrun notarytool store-credentials rockdown-notary --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --keychain "$KEYCHAIN_PATH"
-          echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
-          echo 'APPLE_NOTARY_PROFILE=rockdown-notary' >> "$GITHUB_ENV"
-          echo "APPLE_NOTARY_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-
-      - name: Build and package macOS ZIP and DMG
-        if: matrix.use_app_bundle
-        run: bash scripts/bundle-macos.sh "${{ matrix.target }}"
-
-      - name: Remove macOS signing credentials
-        if: always() && matrix.use_app_bundle
-        run: |
-          if [ -f "$RUNNER_TEMP/rockdown-signing.keychain-db" ]; then
-            security delete-keychain "$RUNNER_TEMP/rockdown-signing.keychain-db"
-          fi
-          rm -f "$RUNNER_TEMP/certificate.p12"
 
       # Package Windows archive
       - name: Package Windows Binary
-        if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist
