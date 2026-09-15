@@ -16,6 +16,8 @@ pub struct Config {
     pub writing_width: f32,
     /// Show source line numbers in Markdown documents.
     pub markdown_line_numbers: bool,
+    /// Portable document-relative directory for imported image files.
+    pub image_assets_dir: String,
     pub terminal_height: f32,
     pub shell: String,
     pub theme: Theme,
@@ -221,6 +223,7 @@ impl Default for Config {
             explorer_width: 290.,
             writing_width: 820.,
             markdown_line_numbers: false,
+            image_assets_dir: "assets".into(),
             terminal_height: 240.,
             shell: std::env::var(if cfg!(windows) { "COMSPEC" } else { "SHELL" })
                 .ok()
@@ -243,6 +246,8 @@ impl Default for Config {
                 ("ctrl-e".into(), "explorer".into()),
                 ("cmd-shift-t".into(), "themes".into()),
                 ("ctrl-shift-t".into(), "themes".into()),
+                ("cmd-shift-o".into(), "outline".into()),
+                ("ctrl-shift-o".into(), "outline".into()),
                 ("ctrl-`".into(), "terminal".into()),
                 ("cmd-1".into(), "editor".into()),
                 ("ctrl-1".into(), "editor".into()),
@@ -288,6 +293,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        crate::image_assets::validate_assets_dir(&self.image_assets_dir)?;
         for (name, value, min, max) in [
             ("font_size", self.font_size, 10., 32.),
             ("line_height", self.line_height, self.font_size + 4., 64.),
@@ -354,6 +360,7 @@ impl Config {
                 "explorer",
                 "terminal",
                 "themes",
+                "outline",
                 "editor",
                 "help",
                 "buffer-delete",
@@ -395,6 +402,19 @@ pub fn parse_color(value: &str) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_asset_directory_configuration_stays_document_relative() {
+        let config = Config::parse(Path::new("c.toml"), "image_assets_dir = 'media/图片'").unwrap();
+        config.validate().unwrap();
+        for directory in ["", "../assets", "/tmp/assets", "C:/assets"] {
+            let config = Config {
+                image_assets_dir: directory.into(),
+                ..Default::default()
+            };
+            assert!(config.validate().is_err());
+        }
+    }
 
     #[test]
     fn theme_presets_supply_valid_palettes() {

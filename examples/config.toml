@@ -6,6 +6,8 @@ line_height = 30
 # Markdown column maximum in logical pixels (320–1600); shrinks with the window.
 writing_width = 820
 markdown_line_numbers = false
+# Pasted/dropped images are copied beside the Markdown file into this child path.
+image_assets_dir = "assets"
 explorer_width = 290
 terminal_height = 240
 # Toggle the right dock with Ctrl-E; drag its left edge to resize.
@@ -66,8 +68,8 @@ color = "#566575"
 thickness = 1.5
 
 # Specifying keys replaces the default shortcut map.
-# Supported actions: save, paste (clipboard), explorer (toggle), terminal,
-# editor, help, themes, buffer-delete, previous-buffer, next-buffer.
+# Supported actions: new, open, save, save-as, paste (clipboard), explorer (toggle),
+# terminal, editor, help, themes, outline, buffer-delete, previous-buffer, next-buffer.
 [keys]
 cmd-n = "new"
 ctrl-n = "new"
@@ -91,3 +93,5 @@ ctrl-shift-w = "buffer-delete"
 f1 = "help"
 cmd-shift-t = "themes"
 ctrl-shift-t = "themes"
+cmd-shift-o = "outline"
+ctrl-shift-o = "outline"

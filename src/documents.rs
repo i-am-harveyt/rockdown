@@ -33,6 +33,24 @@ impl Documents {
         }
     }
 
+    pub(crate) fn from_recovery(entries: Vec<OpenDocument>, active: usize) -> Option<Self> {
+        if entries.is_empty() {
+            return None;
+        }
+        let next_id = entries
+            .iter()
+            .map(|entry| entry.id)
+            .max()
+            .expect("nonempty restored documents")
+            .checked_add(1)
+            .expect("recovery assigns bounded buffer IDs");
+        Some(Self {
+            active: active.min(entries.len() - 1),
+            entries,
+            next_id,
+        })
+    }
+
     pub fn current(&self) -> &Document {
         &self.entries[self.active].document
     }
