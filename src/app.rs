@@ -3,6 +3,7 @@ use crate::{
     config::{Config, Theme, ThemePreset, parse_color},
     document::Document,
     explorer::Explorer,
+    image_assets::{self, ImageInput},
     markdown::{self, RenderedLine},
     outline::{self, Heading},
     recovery::RecoveryStore,
@@ -1112,6 +1113,181 @@ impl Workspace {
         .detach();
     }
 
+    fn accepts_images(&self) -> bool {
+        self.pane == Pane::Editor
+            && !self.help
+            && self.theme_picker.is_none()
+            && self.outline_picker.is_none()
+            && self.command.is_none()
+            && self.documents.current().is_markdown()
+    }
+
+    fn paste_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        let has_images = item
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, ClipboardEntry::Image(_)));
+        if has_images && self.accepts_images() {
+            let inputs = item
+                .into_entries()
+                .filter_map(|entry| match entry {
+                    ClipboardEntry::Image(image) => Some(ImageInput::Bytes(image.bytes)),
+                    ClipboardEntry::String(_) => None,
+                })
+                .collect();
+            self.begin_image_import(inputs, window, cx);
+        } else if let Some(text) = item.text() {
+            self.type_text(&text);
+        } else if has_images {
+            self.message = "Images can only be inserted into a Markdown editor (.md)".into();
+            cx.notify();
+        }
+    }
+
+    /// Common entrypoint for native editor file drops and callers with local paths.
+    pub fn import_image_files(
+        &mut self,
+        paths: &[PathBuf],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.begin_image_import(
+            paths.iter().cloned().map(ImageInput::File).collect(),
+            window,
+            cx,
+        );
+    }
+
+    fn begin_image_import(
+        &mut self,
+        inputs: Vec<ImageInput>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if inputs.is_empty() {
+            return;
+        }
+        if !self.accepts_images() {
+            self.message = "Images can only be inserted into a Markdown editor (.md)".into();
+            cx.notify();
+            return;
+        }
+        if self.dialog_pending {
+            self.message = "Finish the open dialog before inserting images".into();
+            cx.notify();
+            return;
+        }
+        let id = self.documents.active_id();
+        let document = self.documents.current();
+        if document.path.is_some() {
+            if let Err(error) = self.finish_image_import(id, &inputs, None, cx) {
+                self.message = format!("Image import failed: {error:#}");
+            }
+            cx.notify();
+            return;
+        }
+        let token = document.recovery_token();
+        let caret = (document.buffer.row, document.buffer.col);
+        let receiver = cx.prompt_for_new_path(&self.explorer.directory, Some("Untitled.md"));
+        self.dialog_pending = true;
+        self.message = "Save this document as Markdown to insert images".into();
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update_in(cx, |this, _, cx| {
+                this.dialog_pending = false;
+                let result = match result {
+                    Ok(Ok(Some(path))) => (|| -> Result<()> {
+                        let document = this
+                            .documents
+                            .get(id)
+                            .ok_or_else(|| anyhow::anyhow!("The original document was closed"))?;
+                        if document.path.is_some() || document.recovery_token() != token {
+                            bail!("The original document changed; paste or drop the images again");
+                        }
+                        if !path
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+                        {
+                            bail!("Cannot insert images: choose a Markdown (.md) save path");
+                        }
+                        this.documents.save_id(id, Some(&path))?;
+                        this.finish_image_import(id, &inputs, Some(caret), cx)
+                    })(),
+                    Ok(Err(error)) => Err(error),
+                    _ => {
+                        this.message = "Image insertion cancelled".into();
+                        cx.notify();
+                        return;
+                    }
+                };
+                if let Err(error) = result {
+                    this.message = format!("Image import failed: {error:#}");
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn finish_image_import(
+        &mut self,
+        id: u64,
+        inputs: &[ImageInput],
+        caret: Option<(usize, usize)>,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        let document = self
+            .documents
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("The original document was closed"))?;
+        if !document.is_markdown() {
+            bail!("Images require a Markdown (.md) document");
+        }
+        let path = document
+            .path
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Save the document before inserting images"))?;
+        let text = image_assets::import_images(path, &self.config.image_assets_dir, inputs)?;
+        let active = self.documents.active_id();
+        self.documents.select(id)?;
+        let buffer = &mut self.documents.current_mut().buffer;
+        if let Some((row, col)) = caret {
+            buffer.row = row;
+            buffer.col = col;
+        }
+        let insert_mode = buffer.mode == Mode::Insert;
+        if insert_mode {
+            // Finish preceding typing without moving the source insertion caret.
+            let col = buffer.col;
+            buffer.key("escape");
+            buffer.mode = Mode::Insert;
+            buffer.col = col;
+        }
+        buffer.insert_text(&text);
+        if insert_mode {
+            // Isolate the import from both preceding and subsequent Insert typing.
+            let col = buffer.col;
+            buffer.key("escape");
+            buffer.mode = Mode::Insert;
+            buffer.col = col;
+        }
+        self.documents.select(active)?;
+        if active == id {
+            self.marked = None;
+            self.preferred_visual_x = None;
+            self.follow_cursor = true;
+            self.refresh_projection();
+        }
+        self.message = format!("Inserted {} local image(s)", inputs.len());
+        self.checkpoint_recovery(cx);
+        Ok(())
+    }
+
     fn save_dialog(
         &mut self,
         id: u64,
@@ -1528,11 +1704,7 @@ impl Workspace {
                 cx,
             )?,
             "buffer-delete" => self.close_tab(self.documents.active_id(), window, cx),
-            "paste" => {
-                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                    self.type_text(&text);
-                }
-            }
+            "paste" => self.paste_clipboard(window, cx),
             _ => {}
         }
         self.focus.focus(window);
@@ -1725,6 +1897,12 @@ impl Workspace {
             self.request_window_close(window, cx);
             return Ok(true);
         }
+        let clipboard_shortcut =
+            crate::keyboard::clipboard_shortcut(stroke, self.pane == Pane::Terminal);
+        if clipboard_shortcut && stroke.key == "v" && !self.help && self.theme_picker.is_none() {
+            self.paste_clipboard(window, cx);
+            return Ok(true);
+        }
         if self.outline_picker.is_some() {
             if self.marked.is_some() {
                 return Ok(false);
@@ -1801,14 +1979,6 @@ impl Workspace {
                 "left" => self.help_section = (self.help_section + HELP.len() - 1) % HELP.len(),
                 "right" | "tab" => self.help_section = (self.help_section + 1) % HELP.len(),
                 _ => {}
-            }
-            return Ok(true);
-        }
-        let clipboard_shortcut =
-            crate::keyboard::clipboard_shortcut(stroke, self.pane == Pane::Terminal);
-        if clipboard_shortcut && stroke.key == "v" {
-            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                self.type_text(&text);
             }
             return Ok(true);
         }
@@ -2660,6 +2830,34 @@ impl Workspace {
                 cx.listener(|this, _, _, _| this.mouse_anchor = None),
             )
             .on_scroll_wheel(cx.listener(move |this, event, _, cx| this.scroll(pane, event, cx)))
+            .when(pane == Pane::Editor, |surface| {
+                surface.on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                    if !this.help
+                        && this.theme_picker.is_none()
+                        && this.outline_picker.is_none()
+                        && this.command.is_none()
+                    {
+                        this.set_pane(Pane::Editor, cx);
+                        let buffer = &this.documents.current().buffer;
+                        let previous = (buffer.row, buffer.col, buffer.revision());
+                        if this.accepts_images()
+                            && let Some((row, col)) =
+                                this.mouse_location(Pane::Editor, window.mouse_position())
+                        {
+                            let buffer = &mut this.documents.current_mut().buffer;
+                            buffer.row = row;
+                            buffer.col = col;
+                        }
+                        this.import_image_files(paths.paths(), window, cx);
+                        let buffer = &mut this.documents.current_mut().buffer;
+                        if buffer.revision() == previous.2 {
+                            // Failed/cancelled imports must not displace the existing caret.
+                            buffer.row = previous.0;
+                            buffer.col = previous.1;
+                        }
+                    }
+                }))
+            })
             .child(Surface {
                 workspace: cx.entity(),
                 pane,
@@ -3190,6 +3388,8 @@ const HELP: &[HelpSection] = &[
         notes: &[
             "Live preview applies to .md files (case-insensitive) and untitled buffers. Inactive lines render; the cursor line exposes editable syntax. Other files remain literal text. Save As updates the preview type.",
             "Prose wraps automatically. Local images default to 60% of the pane width; remote images remain linked alt text without network requests.",
+            "Paste PNG/JPEG/GIF/WebP images with Cmd-V or Ctrl-Shift-V, or drop image files into the editor. Untitled documents ask for Save As first; assets are copied beside the document using image_assets_dir (default assets).",
+            "Image imports are one undoable edit. Undo removes links, not shared asset files; Save writes the Markdown. Missing local images show a repair hint. No images are uploaded or fetched.",
             "Markdown styling supports headings, emphasis, code, lists, tasks, tables, and quotes. Your document stays plain UTF-8 text on disk.",
         ],
     },
