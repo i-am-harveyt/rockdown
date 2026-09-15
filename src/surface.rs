@@ -547,16 +547,6 @@ impl Element for Surface {
                             base = color(&heading.color).unwrap_or(base);
                             heading_underline = heading.underline;
                         }
-                        BlockKind::Code => result.quads.push(fill(
-                            Bounds::new(
-                                point(bounds.left() + px(gutter - 6.), y),
-                                size(
-                                    (bounds.size.width - px(gutter)).max(px(0.)),
-                                    px(line_height),
-                                ),
-                            ),
-                            panel,
-                        )),
                         BlockKind::Quote => {
                             base = style.quote.unwrap_or(base);
                             result.quads.push(fill(
@@ -615,6 +605,15 @@ impl Element for Surface {
                         .as_ref()
                         .map_or(1, |line| line.wrap_boundaries.len() + 1)
                         as f32);
+                if !raw && app.projection[source_row].kind == BlockKind::Code {
+                    result.quads.push(fill(
+                        Bounds::new(
+                            point(bounds.left() + px(gutter - 6.), y),
+                            size((bounds.size.width - px(gutter)).max(px(0.)), row_height),
+                        ),
+                        panel,
+                    ));
+                }
                 if heading_underline {
                     result.quads.push(fill(
                         Bounds::new(
@@ -1167,4 +1166,70 @@ fn terminal_color(color: vt100::Color, default: Hsla) -> Hsla {
         }
     };
     rgb(value).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Pane, Surface, Workspace};
+    use crate::{config::Config, document::Document, explorer::Explorer};
+    use gpui::{Background, Bounds, Element, TestAppContext, point, px, size};
+
+    #[gpui::test]
+    fn code_block_background_covers_wrapped_rows(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let text = format!(
+            "outside\n```rust\n{}\nshort\n```\nafter",
+            "let message = \"hello world\"; ".repeat(12)
+        );
+        let (view, window) = cx.add_window_view(|window, cx| {
+            Workspace::new(
+                Config::default(),
+                None,
+                Document::untitled(&text),
+                Explorer::open(directory.path()).unwrap(),
+                window,
+                cx,
+            )
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            let mut surface = Surface {
+                workspace: view.clone(),
+                pane: Pane::Editor,
+            };
+            for width in [300., 600.] {
+                let prepared = surface.prepaint(
+                    None,
+                    None,
+                    Bounds::new(point(px(0.), px(0.)), size(px(width), px(2000.))),
+                    &mut (),
+                    window,
+                    cx,
+                );
+                let panel: Background = view.read(cx).color(&view.read(cx).config.theme.panel).into();
+                for source_row in [2, 3] {
+                    let row = prepared
+                        .layout
+                        .rows
+                        .iter()
+                        .find(|row| row.source_row == source_row)
+                        .unwrap();
+                    assert!(!row.raw);
+                    if source_row == 2 {
+                        assert!(row.height > row.line_height);
+                    }
+                    for visual_row in 0..((row.height / row.line_height) as usize) {
+                        let sample = row.origin
+                            + point(px(1.), row.line_height * (visual_row as f32 + 0.5));
+                        assert!(
+                            prepared.quads.iter().any(|quad| {
+                                quad.background == panel && quad.bounds.contains(&sample)
+                            }),
+                            "code row {source_row}, visual row {visual_row} has no panel background at width {width}"
+                        );
+                    }
+                }
+            }
+        });
+    }
 }
