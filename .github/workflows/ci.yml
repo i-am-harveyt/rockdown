@@ -11,22 +11,16 @@ permissions:
 
 jobs:
   check:
-    name: Check (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, windows-latest]
+    name: Check (Windows x64)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - name: Initialize MSVC and Windows SDK
-        if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
       - name: Locate Windows shader compiler
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $fxc = Join-Path $env:WindowsSdkVerBinPath 'x64\fxc.exe'
@@ -43,7 +37,6 @@ jobs:
           cargo run --release --locked -- --help
           cargo run --release --locked -- --check-config --config examples/config.toml
       - name: Upload Windows executable
-        if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: rockdown-windows-x64
