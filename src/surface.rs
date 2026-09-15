@@ -113,6 +113,11 @@ fn load_image(path: &Path) -> Option<Arc<RenderImage>> {
 pub struct SurfaceLayout {
     pub rows: Vec<HitRow>,
     pub text_width: Pixels,
+    pub links: Vec<LinkHit>,
+}
+pub struct LinkHit {
+    pub bounds: Bounds<Pixels>,
+    pub url: String,
 }
 pub struct HitRow {
     pub source_row: usize,
@@ -1009,6 +1014,59 @@ impl Surface {
                     },
                 y,
             );
+            let mut span_start = 0;
+            for span in &table.cells[column] {
+                let span_end = span_start + span.text.len();
+                if let Some(url) = &span.link {
+                    let starts = std::iter::once(0).chain(cell.wrapped.iter().flat_map(|line| {
+                        line.wrap_boundaries.iter().map(|boundary| {
+                            line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix]
+                                .index
+                        })
+                    }));
+                    let mut starts = starts.peekable();
+                    let mut visual_row = 0;
+                    while let Some(start) = starts.next() {
+                        let end = starts.peek().copied().unwrap_or(cell.text.len());
+                        let first = span_start.max(start);
+                        let last = span_end.min(end);
+                        if first < last {
+                            let left = cell.line.x_for_index(start);
+                            let width = cell.line.x_for_index(end) - left;
+                            let shift = if cell.wrapped.is_some() {
+                                match align {
+                                    TextAlign::Left => px(0.),
+                                    TextAlign::Center => (clip.size.width - width) / 2.,
+                                    TextAlign::Right => clip.size.width - width,
+                                }
+                            } else {
+                                px(0.)
+                            };
+                            let hit = Bounds::new(
+                                origin
+                                    + point(
+                                        shift + cell.line.x_for_index(first) - left,
+                                        px(line_height) * visual_row as f32,
+                                    ),
+                                size(
+                                    cell.line.x_for_index(last) - cell.line.x_for_index(first),
+                                    px(line_height),
+                                ),
+                            )
+                            .intersect(&clip)
+                            .intersect(&bounds);
+                            if hit.size.width > px(0.) && hit.size.height > px(0.) {
+                                result.layout.links.push(LinkHit {
+                                    bounds: hit,
+                                    url: url.clone(),
+                                });
+                            }
+                        }
+                        visual_row += 1;
+                    }
+                }
+                span_start = span_end;
+            }
             result.text.push(DrawText {
                 line: cell.line.clone(),
                 wrapped: cell.wrapped.clone(),

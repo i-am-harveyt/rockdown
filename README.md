@@ -122,10 +122,32 @@ Press **F1** or enter `:help` for the in-app reference. Browse Editing, Navigati
 | `Ctrl-PageUp` / `Ctrl-PageDown` | Previous / next editor buffer. |
 | `Cmd-W` / `Ctrl-Shift-W` | Close the current editor buffer, prompting to Save / Discard / Cancel if needed. |
 | `F1` | Toggle the keyboard guide. |
+| `Cmd-Shift-O` / `Ctrl-Shift-O` | Toggle the searchable document outline. |
 
 Click a pane to focus it. In Markdown, clicks place the caret near the clicked text and preserve Insert mode; dragging or double-clicking a word creates a Vim Visual selection. Active prose stays wrapped, and Insert-mode Up/Down move between visual rows. The **terminal icon** is at the bottom-left; the **folder** and **circled question-mark** icons at the bottom-right toggle Files and Help. Hover for a tooltip identifying the action; icons stay highlighted while their dock or guide is open. Footer buttons, buffer tabs, and tab-close controls have distinct hover and pressed highlights. The macOS title bar centers **Rockdown — {buffer name}** and updates when you switch or save a buffer under a new name.
 
 ## Markdown editing
+
+### Document outline and section links
+
+Click **Outline** in the footer, press **Cmd/Ctrl-Shift-O**, or enter `:outline`.
+The dismissible navigator lists the current Markdown document's headings with
+their hierarchy and current-section indication. Type to filter heading titles
+(including Chinese IME input), use Up/Down to select and Enter to jump, or click a
+heading. Escape dismisses it. Navigation leaves document text, editing mode, and
+undo history unchanged.
+
+ATX (`# Heading`) and setext headings are included, including headings inside
+quotes or lists; apparent headings inside code blocks are excluded. The outline
+updates after edits, document switches, and Save As. Non-Markdown files do not
+generate an outline.
+
+Cmd-click or Ctrl-click a local `#fragment` link in Markdown preview to jump to
+its heading, including wrapped prose and table cells. Anchors use lowercase
+Unicode heading text with punctuation removed, whitespace replaced by hyphens,
+and numeric suffixes for duplicates. Percent-encoded fragments are supported.
+Unknown fragments do not move the caret. This is document-local navigation:
+it does not open remote links, build a cross-file index, or fetch anything.
 
 ### Modes and common keys
 
@@ -432,11 +454,16 @@ Supported action names are:
 
 ```text
 save
+new
+open
+save-as
 paste
 explorer
 terminal
 editor
 help
+themes
+outline
 buffer-delete
 previous-buffer
 next-buffer
