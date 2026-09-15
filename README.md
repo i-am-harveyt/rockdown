@@ -187,6 +187,50 @@ In Insert mode, Return continues a Markdown list or quote using the current inde
 
 Click a task's `[ ]` or `[x]` marker to toggle it in source or preview. The change is undoable and preserves the caret and editing mode. Modified clicks retain ordinary editor behavior. Task-like text inside code blocks is not interactive.
 
+### Pasting and dropping images
+
+Paste an image with **Cmd-V** or **Ctrl-Shift-V**, or drag local image files into
+the Markdown editor. Clipboard images insert at the caret; file drops use the
+drop position when it is over laid-out text. PNG, JPEG, GIF, and WebP are checked
+from their actual bytes, not just their extensions.
+
+Rockdown copies the images into `assets/` beside the document and inserts ordinary
+Markdown links. Set the top-level `image_assets_dir = "assets"` option to another
+relative child directory, such as `"images"` or `"文章 圖片"`. Absolute paths,
+parent traversal, backslashes/drive prefixes, and symlink asset directories are
+rejected. Imported links percent-encode spaces, Chinese characters, and reserved
+filename characters so the document and asset directory can travel together.
+
+- Untitled documents first open Save As. Cancelling creates no assets. The import
+  stays attached to the initiating document if you switch tabs while the dialog
+  is open; changing or closing that document cancels the pending import.
+- Existing assets are never overwritten. Identical regular-file assets can be
+  reused; other collisions receive a new filename. Original image files are
+  copied, never moved.
+- Image validation and copying run in the background. Switching tabs keeps the
+  import attached to its original document and insertion position. Editing,
+  reloading, saving, or closing that document before completion rejects the
+  insertion with a retry message; already copied assets are retained.
+- A batch inserts as one undoable edit. A validation or copy failure rolls back
+  newly created assets; undo removes the Markdown insertion **without deleting
+  image files**, which might be shared by other links. The document remains
+  unsaved until you Save.
+- Files refreshes automatically after images are copied. Pending Files edits are
+  never discarded: commit or undo those edits, then use `:e` when the status bar
+  reports that refreshing was deferred.
+- Plain-text files, the terminal, Files, and the outline do not import images.
+  Text clipboard content stays literal.
+- Local previews load in the background, are centered in the writing column,
+  and honor EXIF rotation and mirroring. Preview bitmaps are limited to 1600
+  pixels on their longest edge; source image bytes remain unchanged.
+- Missing, unreadable, or unsupported local images show an explanatory preview
+  label. Restoring or replacing a missing file is picked up on the next render.
+  Remote images remain alt text: nothing is uploaded or fetched.
+
+Save As and file renames do not relocate existing assets or rewrite their links.
+Move/copy the Markdown file together with its relative asset directory when
+relocating the document.
+
 ### Whole-buffer substitution
 
 From Normal mode, use `:%s/pattern/replacement/flags` in the editor or file explorer:
@@ -386,6 +430,7 @@ font_size = 16
 line_height = 30
 explorer_width = 300
 terminal_height = 240
+image_assets_dir = "assets"
 shell = "/bin/zsh"
 
 [theme]
@@ -405,6 +450,7 @@ A complete example, including the default shortcut map, is provided in [`example
 | `font_family` | `Consolas` on Windows, `Menlo` elsewhere | Use a font installed on your system. |
 | `font_size` | `15` | Range: 10–32. |
 | `line_height` | `30` | At least `font_size + 4`, at most 64. |
+| `image_assets_dir` | `"assets"` | Relative child directory for pasted/dropped images; no parent traversal or symlink directories. |
 | `explorer_width` | `290` | Configured range: 180–600; display width also respects window size. |
 | `terminal_height` | `240` | Range: 100–600. |
 | `shell` | Windows: `%COMSPEC%`, then `cmd.exe`; Unix: `$SHELL`, then `/bin/sh` | Shell executable, not a command string with arguments. |

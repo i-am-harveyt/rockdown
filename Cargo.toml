@@ -46,3 +46,13 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = true
+
+# Photo decoding/resizing is CPU-bound even while the application is debugged.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.zune-core]
+opt-level = 3
