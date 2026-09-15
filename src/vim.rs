@@ -114,6 +114,23 @@ impl Buffer {
         }
     }
 
+    pub(crate) fn from_recovery(text: &str, saved_text: &str) -> Self {
+        let mut buffer = Self::new(text);
+        buffer.saved_text = normalize_newlines(saved_text).into_owned();
+        buffer
+    }
+
+    pub(crate) fn saved_text(&self) -> &str {
+        &self.saved_text
+    }
+
+    /// Recovery always resumes in Normal mode, with a valid grapheme position.
+    pub(crate) fn restore_cursor(&mut self, row: usize, col: usize) {
+        self.row = row;
+        self.col = col;
+        self.clamp();
+    }
+
     /// Import clipboard text without treating a paste as a new yank.
     pub fn set_clipboard(&mut self, text: Option<String>, linewise: bool) {
         self.register = text.map(|text| {

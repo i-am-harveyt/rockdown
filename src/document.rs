@@ -14,6 +14,7 @@ pub struct Document {
     bom: bool,
     // Keep the exact on-disk text, not the normalized buffer, for conflict checks.
     saved: Option<String>,
+    recovery_generation: u64,
 }
 
 impl Document {
@@ -32,6 +33,7 @@ impl Document {
             line_ending,
             bom,
             saved: None,
+            recovery_generation: next_recovery_generation(),
         }
     }
     pub fn open(path: &Path) -> Result<Self> {
@@ -96,6 +98,7 @@ impl Document {
         self.saved = Some(text);
         self.path = Some(path);
         self.buffer.mark_saved();
+        self.recovery_generation = next_recovery_generation();
         Ok(())
     }
     pub fn reconcile(&mut self, report: &crate::explorer::CommitReport) {
@@ -116,6 +119,53 @@ impl Document {
             self.path = Some(new.join(path.strip_prefix(old).expect("matched prefix")));
         }
     }
+
+    pub(crate) fn recovery_token(&self) -> (u64, u64) {
+        (self.recovery_generation, self.buffer.revision())
+    }
+
+    pub(crate) fn has_saved_file(&self) -> bool {
+        self.path.is_some() && self.saved.is_some()
+    }
+
+    pub(crate) fn recovery_contents(&self) -> Option<RecoveryContents> {
+        if self.has_saved_file() && !self.buffer.dirty() {
+            return None;
+        }
+        Some(RecoveryContents {
+            text: self.buffer.text(),
+            saved_text: self.buffer.saved_text().to_owned(),
+            disk_text: self.saved.clone(),
+            crlf: self.line_ending == "\r\n",
+            bom: self.bom,
+        })
+    }
+
+    pub(crate) fn from_recovery(path: Option<PathBuf>, contents: RecoveryContents) -> Self {
+        Self {
+            buffer: Buffer::from_recovery(&contents.text, &contents.saved_text),
+            path,
+            line_ending: if contents.crlf { "\r\n" } else { "\n" },
+            bom: contents.bom,
+            saved: contents.disk_text,
+            recovery_generation: next_recovery_generation(),
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecoveryContents {
+    text: String,
+    saved_text: String,
+    disk_text: Option<String>,
+    crlf: bool,
+    bom: bool,
+}
+
+fn next_recovery_generation() -> u64 {
+    static GENERATION: AtomicU64 = AtomicU64::new(1);
+    GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
