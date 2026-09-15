@@ -1183,7 +1183,7 @@ impl Workspace {
         let id = self.documents.active_id();
         let document = self.documents.current();
         if document.path.is_some() {
-            if let Err(error) = self.finish_image_import(id, &inputs, None, cx) {
+            if let Err(error) = self.start_image_import(id, inputs, None, cx) {
                 self.message = format!("Image import failed: {error:#}");
             }
             cx.notify();
@@ -1216,7 +1216,7 @@ impl Workspace {
                             bail!("Cannot insert images: choose a Markdown (.md) save path");
                         }
                         this.documents.save_id(id, Some(&path))?;
-                        this.finish_image_import(id, &inputs, Some(caret), cx)
+                        this.start_image_import(id, inputs, Some(caret), cx)
                     })(),
                     Ok(Err(error)) => Err(error),
                     _ => {
@@ -1234,10 +1234,10 @@ impl Workspace {
         .detach();
     }
 
-    fn finish_image_import(
+    fn start_image_import(
         &mut self,
         id: u64,
-        inputs: &[ImageInput],
+        inputs: Vec<ImageInput>,
         caret: Option<(usize, usize)>,
         cx: &mut Context<Self>,
     ) -> Result<()> {
@@ -1250,16 +1250,73 @@ impl Workspace {
         }
         let path = document
             .path
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("Save the document before inserting images"))?;
-        let text = image_assets::import_images(path, &self.config.image_assets_dir, inputs)?;
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Save the document before inserting images"))?
+            .to_path_buf();
+        let token = document.recovery_token();
+        let caret = caret.unwrap_or((document.buffer.row, document.buffer.col));
+        let count = inputs.len();
+        let assets_dir = self.config.image_assets_dir.clone();
+        self.message = format!("Importing {count} image(s)…");
+        cx.notify();
+        let worker_path = path.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { image_assets::import_images(&worker_path, &assets_dir, &inputs) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                let imported = result.is_ok();
+                let result = result.and_then(|text| {
+                    let document = this
+                        .documents
+                        .get(id)
+                        .ok_or_else(|| anyhow::anyhow!("The original document was closed"))?;
+                    // Never insert a stale caret into edited/reloaded contents or
+                    // relative asset links into a document saved under another path.
+                    if document.path.as_ref() != Some(&path) || document.recovery_token() != token {
+                        bail!("The original document changed; paste or drop the images again");
+                    }
+                    this.finish_image_import(id, &text, caret, cx)
+                });
+                this.message = match result {
+                    Ok(()) => format!("Inserted {count} local image(s)"),
+                    Err(error) if imported => {
+                        format!("Imported {count} local image(s); insertion skipped: {error:#}")
+                    }
+                    Err(error) => format!("Image import failed: {error:#}"),
+                };
+                // Copying can succeed even when a concurrent document change
+                // prevents inserting the links. Files still needs the new assets.
+                if imported {
+                    if this.explorer.dirty() {
+                        this.message.push_str(
+                            " · Files refresh deferred: commit or undo pending Files edits, then :e",
+                        );
+                    } else if let Err(error) = this.explorer.reload() {
+                        this.message
+                            .push_str(&format!(" · Files refresh failed: {error:#}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        Ok(())
+    }
+
+    fn finish_image_import(
+        &mut self,
+        id: u64,
+        text: &str,
+        caret: (usize, usize),
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
         let active = self.documents.active_id();
         self.documents.select(id)?;
         let buffer = &mut self.documents.current_mut().buffer;
-        if let Some((row, col)) = caret {
-            buffer.row = row;
-            buffer.col = col;
-        }
+        buffer.row = caret.0;
+        buffer.col = caret.1;
         let insert_mode = buffer.mode == Mode::Insert;
         if insert_mode {
             // Finish preceding typing without moving the source insertion caret.
@@ -1268,7 +1325,7 @@ impl Workspace {
             buffer.mode = Mode::Insert;
             buffer.col = col;
         }
-        buffer.insert_text(&text);
+        buffer.insert_text(text);
         if insert_mode {
             // Isolate the import from both preceding and subsequent Insert typing.
             let col = buffer.col;
@@ -1283,7 +1340,6 @@ impl Workspace {
             self.follow_cursor = true;
             self.refresh_projection();
         }
-        self.message = format!("Inserted {} local image(s)", inputs.len());
         self.checkpoint_recovery(cx);
         Ok(())
     }
@@ -2839,7 +2895,7 @@ impl Workspace {
                     {
                         this.set_pane(Pane::Editor, cx);
                         let buffer = &this.documents.current().buffer;
-                        let previous = (buffer.row, buffer.col, buffer.revision());
+                        let previous = (buffer.row, buffer.col);
                         if this.accepts_images()
                             && let Some((row, col)) =
                                 this.mouse_location(Pane::Editor, window.mouse_position())
@@ -2850,11 +2906,10 @@ impl Workspace {
                         }
                         this.import_image_files(paths.paths(), window, cx);
                         let buffer = &mut this.documents.current_mut().buffer;
-                        if buffer.revision() == previous.2 {
-                            // Failed/cancelled imports must not displace the existing caret.
-                            buffer.row = previous.0;
-                            buffer.col = previous.1;
-                        }
+                        // The async request captured the drop caret. Leave the
+                        // live caret alone until a successful insertion completes.
+                        buffer.row = previous.0;
+                        buffer.col = previous.1;
                     }
                 }))
             })

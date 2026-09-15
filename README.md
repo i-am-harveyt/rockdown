@@ -207,11 +207,22 @@ filename characters so the document and asset directory can travel together.
 - Existing assets are never overwritten. Identical regular-file assets can be
   reused; other collisions receive a new filename. Original image files are
   copied, never moved.
-- A batch inserts as one undoable edit. Failure rolls back newly created assets;
-  undo removes the Markdown insertion **without deleting image files**, which
-  might be shared by other links. The document remains unsaved until you Save.
+- Image validation and copying run in the background. Switching tabs keeps the
+  import attached to its original document and insertion position. Editing,
+  reloading, saving, or closing that document before completion rejects the
+  insertion with a retry message; already copied assets are retained.
+- A batch inserts as one undoable edit. A validation or copy failure rolls back
+  newly created assets; undo removes the Markdown insertion **without deleting
+  image files**, which might be shared by other links. The document remains
+  unsaved until you Save.
+- Files refreshes automatically after images are copied. Pending Files edits are
+  never discarded: commit or undo those edits, then use `:e` when the status bar
+  reports that refreshing was deferred.
 - Plain-text files, the terminal, Files, and the outline do not import images.
   Text clipboard content stays literal.
+- Local previews load in the background, are centered in the writing column,
+  and honor EXIF rotation and mirroring. Preview bitmaps are limited to 1600
+  pixels on their longest edge; source image bytes remain unchanged.
 - Missing, unreadable, or unsupported local images show an explanatory preview
   label. Restoring or replacing a missing file is picked up on the next render.
   Remote images remain alt text: nothing is uploaded or fetched.

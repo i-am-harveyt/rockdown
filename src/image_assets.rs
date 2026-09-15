@@ -1,9 +1,11 @@
 use anyhow::{Context, Result, bail};
 use std::{
     borrow::Cow,
+    collections::VecDeque,
     fs::{self, OpenOptions},
-    io::{Cursor, Write},
+    io::{BufRead, BufReader, Cursor, Read, Seek, Write},
     path::{Component, Path, PathBuf},
+    sync::Mutex,
 };
 
 pub enum ImageInput {
@@ -71,7 +73,13 @@ fn asset_directory(base: &Path, relative: &str, batch: &mut ImportBatch) -> Resu
     Ok(directory)
 }
 
-fn image_extension(bytes: &[u8]) -> Result<&'static str> {
+fn validated_image(
+    bytes: &[u8],
+) -> Result<(
+    &'static str,
+    image::DynamicImage,
+    image::metadata::Orientation,
+)> {
     let format = image::guess_format(bytes)
         .context("Unsupported image format; use PNG, JPEG, GIF, or WebP")?;
     let extension = match format {
@@ -81,10 +89,89 @@ fn image_extension(bytes: &[u8]) -> Result<&'static str> {
         image::ImageFormat::WebP => "webp",
         _ => bail!("Unsupported image format; use PNG, JPEG, GIF, or WebP"),
     };
-    image::ImageReader::with_format(Cursor::new(bytes), format)
-        .decode()
-        .context("Invalid image data; could not decode the image")?;
-    Ok(extension)
+    let (image, orientation) =
+        decode_pixels(image::ImageReader::with_format(Cursor::new(bytes), format))
+            .context("Invalid image data; could not decode the image")?;
+    Ok((extension, image, orientation))
+}
+
+/// Bound uploads independently of the original photograph's resolution.
+const MAX_PREVIEW_DIMENSION: u32 = 1600;
+/// A bounded, one-use handoff from import validation to the UI's own bitmap cache.
+const MAX_IMPORTED_PREVIEWS: usize = 4;
+static IMPORTED_PREVIEWS: Mutex<VecDeque<PreparedPreview>> = Mutex::new(VecDeque::new());
+
+struct PreparedPreview {
+    path: PathBuf,
+    metadata: fs::Metadata,
+    pixels: image::RgbaImage,
+}
+
+fn decode_pixels(
+    reader: image::ImageReader<impl BufRead + Seek>,
+) -> image::ImageResult<(image::DynamicImage, image::metadata::Orientation)> {
+    use image::ImageDecoder;
+
+    let mut decoder = reader.into_decoder()?;
+    // Keep ImageReader::decode's allocation guard when reading EXIF through
+    // the decoder directly; format sniffing alone must not authorize huge buffers.
+    let mut limits = image::Limits::default();
+    limits.reserve(decoder.total_bytes())?;
+    decoder.set_limits(limits)?;
+    let orientation = decoder.orientation()?;
+    let image = image::DynamicImage::from_decoder(decoder)?;
+    Ok((image, orientation))
+}
+
+fn preview_pixels(
+    mut image: image::DynamicImage,
+    orientation: image::metadata::Orientation,
+) -> image::RgbaImage {
+    // Resize before rotating/mirroring so EXIF transforms touch preview pixels,
+    // not every pixel of a full-resolution camera image. The bound is square.
+    if image.width() > MAX_PREVIEW_DIMENSION || image.height() > MAX_PREVIEW_DIMENSION {
+        image = image.thumbnail(MAX_PREVIEW_DIMENSION, MAX_PREVIEW_DIMENSION);
+    }
+    image.apply_orientation(orientation);
+    image.into_rgba8()
+}
+
+fn same_revision(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if left.dev() != right.dev() || left.ino() != right.ino() {
+            return false;
+        }
+    }
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
+}
+
+pub(crate) fn load_preview(path: &Path) -> Result<image::RgbaImage, &'static str> {
+    let file = fs::File::open(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "Missing local image; restore the file or update its path"
+        } else {
+            "Cannot read local image; check its path and permissions"
+        }
+    })?;
+    if let (Ok(path), Ok(metadata)) = (path.canonicalize(), file.metadata()) {
+        let mut prepared = IMPORTED_PREVIEWS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(index) = prepared.iter().position(|preview| preview.path == path) {
+            let preview = prepared.remove(index).unwrap();
+            if same_revision(&preview.metadata, &metadata) {
+                return Ok(preview.pixels);
+            }
+        }
+    }
+    let reader = image::ImageReader::new(BufReader::new(file))
+        .with_guessed_format()
+        .map_err(|_| "Cannot read local image; check its permissions")?;
+    let (image, orientation) = decode_pixels(reader)
+        .map_err(|_| "Unsupported or damaged local image; use PNG, JPEG, GIF, or WebP")?;
+    Ok(preview_pixels(image, orientation))
 }
 
 fn escaped_alt(text: &str) -> String {
@@ -137,6 +224,7 @@ pub fn import_images(
     let mut batch = ImportBatch::default();
     let directory = asset_directory(base, assets_dir, &mut batch)?;
     let mut markdown = String::new();
+    let mut previews = Vec::with_capacity(inputs.len().min(MAX_IMPORTED_PREVIEWS));
     for input in inputs {
         let (bytes, original): (Cow<'_, [u8]>, Cow<'_, str>) = match input {
             ImageInput::File(path) => (
@@ -149,7 +237,7 @@ pub fn import_images(
             ),
             ImageInput::Bytes(bytes) => (Cow::Borrowed(bytes), Cow::Borrowed("image")),
         };
-        let extension = image_extension(&bytes)?;
+        let (extension, image, orientation) = validated_image(&bytes)?;
         let stem: String = original
             .chars()
             .map(|ch| {
@@ -163,7 +251,7 @@ pub fn import_images(
         let stem = stem.trim_matches([' ', '.']);
         let stem = if stem.is_empty() { "image" } else { stem };
         let mut index = 0_u64;
-        let filename = loop {
+        let (filename, metadata) = loop {
             let filename = if index == 0 {
                 format!("{stem}.{extension}")
             } else {
@@ -179,15 +267,19 @@ pub fn import_images(
                     batch.files.push(target);
                     file.write_all(&bytes).context("Writing image asset")?;
                     file.sync_all().context("Saving image asset")?;
-                    break filename;
+                    break (filename, file.metadata().context("Checking image asset")?);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     // Do not follow an asset symlink, even when its bytes happen to match.
                     if fs::symlink_metadata(&target)
                         .is_ok_and(|metadata| metadata.file_type().is_file())
-                        && fs::read(&target).is_ok_and(|existing| existing == bytes.as_ref())
+                        && let Ok(mut file) = fs::File::open(&target)
+                        && let Ok(metadata) = file.metadata()
                     {
-                        break filename;
+                        let mut existing = Vec::new();
+                        if file.read_to_end(&mut existing).is_ok() && existing == bytes.as_ref() {
+                            break (filename, metadata);
+                        }
                     }
                     index = index
                         .checked_add(1)
@@ -196,6 +288,13 @@ pub fn import_images(
                 Err(error) => return Err(error).context("Creating image asset"),
             }
         };
+        if previews.len() < MAX_IMPORTED_PREVIEWS {
+            previews.push(PreparedPreview {
+                path: directory.join(&filename),
+                metadata,
+                pixels: preview_pixels(image, orientation),
+            });
+        }
         if !markdown.is_empty() {
             markdown.push('\n');
         }
@@ -206,6 +305,16 @@ pub fn import_images(
         ));
     }
     batch.committed = true;
+    let mut prepared = IMPORTED_PREVIEWS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for preview in previews {
+        prepared.retain(|existing| existing.path != preview.path);
+        prepared.push_back(preview);
+    }
+    while prepared.len() > MAX_IMPORTED_PREVIEWS {
+        prepared.pop_front();
+    }
     Ok(markdown)
 }
 
@@ -391,6 +500,60 @@ mod tests {
         assert_eq!(fs::read_dir(temp.path().join("assets")).unwrap().count(), 1);
         assert!(import_images(&document, "new/nested", &[ImageInput::Bytes(vec![])]).is_err());
         assert!(!temp.path().join("new").exists());
+    }
+
+    #[test]
+    fn damaged_pixels_with_valid_headers_roll_back_the_entire_import() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut damaged = png(7);
+        let data = damaged
+            .windows(4)
+            .position(|bytes| bytes == b"IDAT")
+            .unwrap()
+            + 4;
+        damaged[data] ^= 0xff;
+        // A header-only validator would accept this image, but the pixel stream
+        // cannot be decoded and must never commit a document insertion.
+        assert_eq!(
+            image::ImageReader::with_format(Cursor::new(&damaged), image::ImageFormat::Png)
+                .into_dimensions()
+                .unwrap(),
+            (1, 1)
+        );
+        assert!(
+            import_images(
+                &temp.path().join("note.md"),
+                "assets",
+                &[ImageInput::Bytes(png(1)), ImageInput::Bytes(damaged)],
+            )
+            .is_err()
+        );
+        assert!(!temp.path().join("assets").exists());
+    }
+
+    #[test]
+    fn imported_preview_observes_removal_and_replacement_before_first_display() {
+        let temp = tempfile::tempdir().unwrap();
+        let markdown = import_images(
+            &temp.path().join("note.md"),
+            "assets",
+            &[ImageInput::Bytes(png(1))],
+        )
+        .unwrap();
+        let target = destination(temp.path(), &markdown);
+        fs::remove_file(&target).unwrap();
+        assert!(load_preview(&target).is_err());
+        fs::write(&target, png(99)).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&target)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH))
+            .unwrap();
+        assert_eq!(
+            load_preview(&target).unwrap().get_pixel(0, 0).0,
+            [99, 0, 0, 255]
+        );
     }
 
     #[test]

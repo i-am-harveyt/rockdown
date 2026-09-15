@@ -95,6 +95,17 @@ fn clipboard_action_imports_portable_preview_and_one_undo_redo(cx: &mut TestAppC
     assert_eq!(paths.len(), 1);
     assert_eq!(std::fs::read(&paths[0]).unwrap(), png());
     assert_eq!(paths[0].parent().unwrap(), dir.path().join("assets"));
+    window.update(|_, cx| {
+        assert!(
+            view.read(cx)
+                .explorer
+                .buffer
+                .lines
+                .iter()
+                .any(|line| line.text == "assets/"),
+            "Files must show the new assets directory without a manual reload"
+        );
+    });
     window.simulate_keystrokes("j j");
     window.run_until_parked();
     window.update(|_, cx| {
@@ -130,6 +141,7 @@ fn direct_clipboard_shortcut_isolates_image_from_insert_typing(cx: &mut TestAppC
     window.simulate_input("before ");
     put_image(&mut window);
     window.simulate_keystrokes("cmd-v");
+    window.run_until_parked();
     let inserted = text(&mut window, &view);
     assert!(inserted.starts_with("before !["));
     assert!(inserted.ends_with("end"));
@@ -276,6 +288,76 @@ fn common_drop_entrypoint_copies_collisions_and_rolls_back_invalid_batch(cx: &mu
 }
 
 #[gpui::test]
+fn image_import_refreshes_open_assets_directory(cx: &mut TestAppContext) {
+    let (dir, mut window, view) = editor(cx, "", Some("md"));
+    let assets_dir = dir.path().join("assets");
+    std::fs::create_dir(&assets_dir).unwrap();
+    window.update(|_, cx| {
+        view.update(cx, |app, _| {
+            app.explorer = Explorer::open(&assets_dir).unwrap();
+        });
+    });
+    put_image(&mut window);
+    window.simulate_keystrokes("ctrl-shift-v");
+    window.run_until_parked();
+    let paths = assets(dir.path(), &text(&mut window, &view));
+    assert_eq!(paths.len(), 1);
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert_eq!(
+            app.explorer.directory,
+            std::fs::canonicalize(&assets_dir).unwrap()
+        );
+        assert!(
+            app.explorer
+                .buffer
+                .lines
+                .iter()
+                .any(|line| { line.text == paths[0].file_name().unwrap().to_str().unwrap() })
+        );
+        assert!(!app.explorer.dirty());
+    });
+}
+
+#[gpui::test]
+fn image_import_preserves_concurrent_explorer_edits_and_undo(cx: &mut TestAppContext) {
+    let (dir, mut window, view) = editor(cx, "", Some("md"));
+    let source = dir.path().join("source.png");
+    std::fs::write(&source, png()).unwrap();
+    let staged = window.update(|window, cx| {
+        view.update(cx, |app, cx| {
+            app.import_image_files(&[source], window, cx);
+            app.explorer.buffer.insert_text("renamed-");
+            assert!(app.explorer.dirty());
+            app.explorer.buffer.text()
+        })
+    });
+    window.run_until_parked();
+    let paths = assets(dir.path(), &text(&mut window, &view));
+    assert_eq!(paths.len(), 1);
+    assert_eq!(std::fs::read(&paths[0]).unwrap(), png());
+    window.update(|_, cx| {
+        view.update(cx, |app, _| {
+            assert_eq!(app.explorer.buffer.text(), staged);
+            assert!(app.explorer.dirty());
+            app.explorer.buffer.key("u");
+            assert_eq!(app.explorer.buffer.text(), "note.md");
+            assert!(!app.explorer.dirty());
+            app.explorer.reload().unwrap();
+            assert!(
+                app.explorer
+                    .buffer
+                    .lines
+                    .iter()
+                    .any(|line| line.text == "assets/")
+            );
+        });
+    });
+    assert!(dir.path().join("note.md").exists());
+    assert!(!dir.path().join("renamed-note.md").exists());
+}
+
+#[gpui::test]
 fn rejected_contexts_and_non_markdown_save_never_create_assets(cx: &mut TestAppContext) {
     let (dir, mut window, view) = editor(cx, "literal", Some("txt"));
     put_image(&mut window);
@@ -355,6 +437,7 @@ fn logically_named_markdown_imports_without_prompt_or_initial_save(cx: &mut Test
             app.import_image_files(&[source], window, cx);
         });
     });
+    window.run_until_parked();
     let inserted = text(&mut window, &view);
     let paths = assets(dir.path(), &inserted);
     assert_eq!(paths.len(), 1);
@@ -381,4 +464,95 @@ fn direct_paste_keeps_outline_text_literal_and_rejects_images(cx: &mut TestAppCo
         assert!(!buffer.dirty());
     });
     assert!(!dir.path().join("assets").exists());
+}
+
+#[gpui::test]
+fn import_completion_uses_original_document_and_caret(cx: &mut TestAppContext) {
+    let (dir, mut window, view) = editor(cx, "before\nafter", Some("md"));
+    let source = dir.path().join("source.png");
+    std::fs::write(&source, png()).unwrap();
+    let original_id = window.update(|window, cx| {
+        view.update(cx, |app, cx| {
+            app.documents.current_mut().buffer.row = 1;
+            let id = app.documents.active_id();
+            app.import_image_files(&[source], window, cx);
+            assert_eq!(app.buffer().text(), "before\nafter");
+            app.documents.current_mut().buffer.row = 0;
+            app.documents.new_document();
+            app.documents
+                .current_mut()
+                .buffer
+                .insert_text("other edits");
+            app.refresh_projection();
+            id
+        })
+    });
+    window.run_until_parked();
+    window.update(|_, cx| {
+        view.update(cx, |app, _| {
+            assert_eq!(app.buffer().text(), "other edits");
+            let current_caret = (app.buffer().row, app.buffer().col);
+            let original = &app.documents.get(original_id).unwrap().buffer;
+            assert!(original.text().starts_with("before\n!["));
+            assert!(original.text().ends_with("after"));
+            let active = app.documents.active_id();
+            app.documents.select(original_id).unwrap();
+            app.documents.current_mut().buffer.key("u");
+            assert_eq!(app.buffer().text(), "before\nafter");
+            app.documents.select(active).unwrap();
+            assert_eq!((app.buffer().row, app.buffer().col), current_caret);
+        });
+    });
+}
+
+#[gpui::test]
+fn import_completion_rejects_edits_close_reload_and_save_as(cx: &mut TestAppContext) {
+    for change in ["edit", "close", "reload", "save-as"] {
+        let (dir, mut window, view) = editor(cx, "original", Some("md"));
+        let source = dir.path().join("source.png");
+        std::fs::write(&source, png()).unwrap();
+        window.update(|window, cx| {
+            view.update(cx, |app, cx| {
+                app.import_image_files(&[source], window, cx);
+                assert_eq!(app.buffer().text(), "original");
+                match change {
+                    "edit" => app
+                        .documents
+                        .current_mut()
+                        .buffer
+                        .insert_text("concurrent "),
+                    "close" => app.documents.delete(true).unwrap(),
+                    "reload" => app.documents.reload(true).unwrap(),
+                    "save-as" => app
+                        .documents
+                        .save(Some(&dir.path().join("moved.md")), false)
+                        .unwrap(),
+                    _ => unreachable!(),
+                }
+                app.refresh_projection();
+            });
+        });
+        let expected = text(&mut window, &view);
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let app = view.read(cx);
+            assert_eq!(app.buffer().text(), expected, "{change}");
+            assert!(
+                app.explorer
+                    .buffer
+                    .lines
+                    .iter()
+                    .any(|line| line.text == "assets/"),
+                "Files must refresh copied assets even when insertion is rejected: {change}"
+            );
+        });
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("note.md")).unwrap(),
+            "original"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("assets/source.png")).unwrap(),
+            png()
+        );
+    }
 }

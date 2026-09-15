@@ -1,15 +1,17 @@
 use crate::app::{Pane, Workspace};
 use crate::{
-    image_assets::local_image_path,
+    image_assets::{load_preview, local_image_path},
     markdown::{BlockKind, RenderedLine, Span, TableRow},
     vim::Mode,
 };
 use gpui::{prelude::*, *};
 use pulldown_cmark::Alignment;
 use std::{
-    collections::{HashMap, VecDeque},
+    cell::RefCell,
+    collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex},
+    rc::Rc,
+    sync::Arc,
     time::SystemTime,
 };
 
@@ -17,13 +19,9 @@ use std::{
 /// image with the title syntax `![alt](path "40%")` or `"320px"`.
 const DEFAULT_IMAGE_WIDTH: f32 = 0.6;
 
-/// Maximum pixel dimension for inline preview images. Downscales large camera/phone
-/// photos (e.g. 24–48MP) to fit high-DPI displays without allocating hundreds of megabytes
-/// of uncompressed pixel buffers and Metal textures.
-const MAX_PREVIEW_DIMENSION: u32 = 1600;
-
-/// Maximum number of decoded image bitmaps retained in memory simultaneously.
 const MAX_CACHED_IMAGES: usize = 24;
+/// Limit simultaneous full-resolution decodes and their temporary buffers.
+const MAX_IMAGE_WORKERS: usize = 2;
 
 type ImageStamp = Option<(Option<SystemTime>, u64)>;
 type LoadedImage = Result<Arc<RenderImage>, &'static str>;
@@ -33,95 +31,122 @@ struct CachedImage {
     image: LoadedImage,
 }
 
+#[derive(Default)]
 struct ImageCache {
     entries: HashMap<PathBuf, CachedImage>,
     lru: VecDeque<PathBuf>,
+    visible: HashMap<EntityId, (WeakEntity<Workspace>, HashSet<PathBuf>)>,
+    pending: HashSet<PathBuf>,
+    queue: VecDeque<PathBuf>,
+    workers: usize,
 }
 
 impl ImageCache {
-    fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-            lru: VecDeque::new(),
+    fn get(&mut self, path: &Path) -> Option<LoadedImage> {
+        if let Some(pos) = self.lru.iter().position(|p| p == path) {
+            self.lru.remove(pos);
         }
-    }
-
-    fn get(&mut self, path: &Path, stamp: ImageStamp) -> Option<LoadedImage> {
-        if let Some(image) = self.entries.get(path).filter(|entry| entry.stamp == stamp) {
-            if let Some(pos) = self.lru.iter().position(|p| p == path) {
-                self.lru.remove(pos);
-            }
-            self.lru.push_back(path.to_path_buf());
-            Some(image.image.clone())
-        } else {
-            None
-        }
+        self.lru.push_back(path.to_path_buf());
+        self.entries.get(path).map(|entry| entry.image.clone())
     }
 
     fn insert(&mut self, path: PathBuf, stamp: ImageStamp, image: LoadedImage) {
-        if self.entries.contains_key(&path) {
-            if let Some(pos) = self.lru.iter().position(|p| p == &path) {
-                self.lru.remove(pos);
-            }
-        } else {
-            while self.lru.len() >= MAX_CACHED_IMAGES {
-                if let Some(oldest) = self.lru.pop_front() {
-                    self.entries.remove(&oldest);
-                }
+        self.entries
+            .insert(path.clone(), CachedImage { stamp, image });
+        // Completion order is not recency. A queued, now-offscreen image must
+        // not evict previews that the latest layout is still displaying.
+        while self.entries.len() > MAX_CACHED_IMAGES {
+            // Visible previews are working memory, not idle cache entries.
+            // Evicting them would trigger a decode/redraw loop in tall windows.
+            let Some(pos) = self.lru.iter().position(|candidate| {
+                candidate != &path
+                    && !self
+                        .visible
+                        .values()
+                        .any(|(_, paths)| paths.contains(candidate))
+                    && self.entries.contains_key(candidate)
+            }) else {
+                break;
+            };
+            if let Some(oldest) = self.lru.remove(pos) {
+                self.entries.remove(&oldest);
             }
         }
-        self.lru.push_back(path.clone());
-        self.entries.insert(path, CachedImage { stamp, image });
     }
 }
 
-// Decoded bitmaps by path. Layout positions are computed by the renderer, so
-// an image can never escape its row and paint over following content; the
-// cache only saves repeated decoding of the same file.
-static IMAGES: LazyLock<Mutex<ImageCache>> = LazyLock::new(|| Mutex::new(ImageCache::new()));
+// Per-application state stays on the UI executor; workers only own paths and
+// decoded results. In particular, no cache lock spans disk access or decoding.
+#[derive(Default)]
+struct PreviewImages(Rc<RefCell<ImageCache>>);
+impl Global for PreviewImages {}
 
-fn load_image(path: &Path) -> LoadedImage {
-    let stamp = std::fs::metadata(path)
-        .ok()
-        .map(|metadata| (metadata.modified().ok(), metadata.len()));
-    let mut cache = IMAGES
-        .lock()
-        .map_err(|_| "Image cache unavailable; reopen the document")?;
-    if let Some(cached) = cache.get(path, stamp) {
-        return cached;
+fn load_image(path: &Path, cx: &App) -> LoadedImage {
+    let shared = cx.global::<PreviewImages>().0.clone();
+    let mut cache = shared.borrow_mut();
+    let image = cache.get(path).unwrap_or(Err("Loading local image"));
+    if cache.pending.insert(path.to_path_buf()) {
+        cache.queue.push_back(path.to_path_buf());
     }
-    let decoded = std::fs::File::open(path)
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                "Missing local image; restore the file or update its path"
-            } else {
-                "Cannot read local image; check its path and permissions"
-            }
-        })
-        .and_then(|file| {
-            image::ImageReader::new(std::io::BufReader::new(file))
-                .with_guessed_format()
-                .map_err(|_| "Cannot read local image; check its permissions")?
-                .decode()
-                .map_err(|_| "Unsupported or damaged local image; use PNG, JPEG, GIF, or WebP")
-        })
-        .map(|image| {
-            let image = if image.width() > MAX_PREVIEW_DIMENSION
-                || image.height() > MAX_PREVIEW_DIMENSION
-            {
-                image.thumbnail(MAX_PREVIEW_DIMENSION, MAX_PREVIEW_DIMENSION)
-            } else {
-                image
+    if cache.workers >= MAX_IMAGE_WORKERS || cache.queue.is_empty() {
+        return image;
+    }
+    cache.workers += 1;
+    drop(cache);
+    cx.spawn(async move |cx| {
+        loop {
+            let next = {
+                let mut cache = shared.borrow_mut();
+                match cache.queue.pop_front() {
+                    Some(path) => {
+                        let stamp = cache.entries.get(&path).map(|entry| entry.stamp);
+                        Some((path, stamp))
+                    }
+                    None => {
+                        cache.workers -= 1;
+                        None
+                    }
+                }
             };
-            let mut rgba = image.into_rgba8();
-            // The sprite atlas expects BGRA bytes.
-            for pixel in rgba.as_chunks_mut::<4>().0 {
-                pixel.swap(0, 2);
+            let Some((path, previous_stamp)) = next else {
+                break;
+            };
+            let (path, stamp, decoded) = cx
+                .background_executor()
+                .spawn(async move {
+                    let stamp = std::fs::metadata(&path)
+                        .ok()
+                        .map(|metadata| (metadata.modified().ok(), metadata.len()));
+                    let decoded = (previous_stamp != Some(stamp)).then(|| decode_image(&path));
+                    (path, stamp, decoded)
+                })
+                .await;
+            let changed = decoded.is_some();
+            {
+                let mut cache = shared.borrow_mut();
+                cache.pending.remove(&path);
+                if let Some(image) = decoded {
+                    cache.insert(path, stamp, image);
+                }
             }
-            Arc::new(RenderImage::new(vec![image::Frame::new(rgba)]))
-        });
-    cache.insert(path.to_path_buf(), stamp, decoded.clone());
-    decoded
+            // An unchanged metadata check must not create a redraw/check loop.
+            // Refresh the entire layout: aspect ratio changes move following rows.
+            if changed {
+                let _ = cx.update(|cx| cx.refresh_windows());
+            }
+        }
+    })
+    .detach();
+    image
+}
+
+fn decode_image(path: &Path) -> LoadedImage {
+    let mut rgba = load_preview(path)?;
+    // The sprite atlas expects BGRA bytes.
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    Ok(Arc::new(RenderImage::new(vec![image::Frame::new(rgba)])))
 }
 
 #[derive(Default)]
@@ -452,6 +477,19 @@ impl Element for Surface {
         if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
             return Prepared::default();
         }
+        if !cx.has_global::<PreviewImages>() {
+            cx.set_global(PreviewImages::default());
+        }
+        if self.pane == Pane::Editor {
+            let mut cache = cx.global::<PreviewImages>().0.borrow_mut();
+            cache
+                .visible
+                .retain(|_, (workspace, _)| workspace.upgrade().is_some());
+            cache.visible.insert(
+                self.workspace.entity_id(),
+                (self.workspace.downgrade(), HashSet::new()),
+            );
+        }
         loop {
             let mut result = Prepared::default();
             let line_height = self.workspace.read(cx).config.line_height;
@@ -750,7 +788,16 @@ impl Element for Surface {
                         let Some(path) = local_image_path(base, &image.url) else {
                             continue;
                         };
-                        let bitmap = match load_image(&path) {
+                        if let Some((_, paths)) = cx
+                            .global::<PreviewImages>()
+                            .0
+                            .borrow_mut()
+                            .visible
+                            .get_mut(&self.workspace.entity_id())
+                        {
+                            paths.insert(path.clone());
+                        }
+                        let bitmap = match load_image(&path, cx) {
                             Ok(bitmap) => bitmap,
                             Err(message) => {
                                 let label = format!("{message}: {}", image.url);
@@ -806,7 +853,10 @@ impl Element for Surface {
                         .min(available);
                         let height = width / ratio;
                         images.push((
-                            Bounds::new(point(origin.x, y + row_height), size(width, height)),
+                            Bounds::new(
+                                point(origin.x + (available - width) / 2., y + row_height),
+                                size(width, height),
+                            ),
                             bitmap,
                         ));
                         row_height += height;
@@ -1304,6 +1354,174 @@ mod tests {
     use super::{Pane, Surface, Workspace};
     use crate::{config::Config, document::Document, explorer::Explorer};
     use gpui::{Background, Bounds, Element, TestAppContext, point, px, size};
+
+    fn oriented_jpeg(width: u32, height: u32, orientation: u16) -> Vec<u8> {
+        let colors = [[240, 20, 20], [20, 240, 20], [20, 20, 240], [240, 240, 20]];
+        let image = image::RgbImage::from_fn(width, height, |x, y| {
+            image::Rgb(colors[(usize::from(y >= height / 2) * 2) + usize::from(x >= width / 2)])
+        });
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 100)
+            .encode_image(&image::DynamicImage::ImageRgb8(image))
+            .unwrap();
+        let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+        exif.extend_from_slice(&orientation.to_le_bytes());
+        exif.extend_from_slice(&[0; 6]);
+        let mut result = jpeg[..2].to_vec();
+        result.extend_from_slice(&[0xff, 0xe1]);
+        result.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        result.extend(exif);
+        result.extend_from_slice(&jpeg[2..]);
+        result
+    }
+
+    #[test]
+    fn preview_honors_rotated_and_mirrored_exif_without_changing_source() {
+        use crate::image_assets::{ImageInput, import_images};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("camera.jpg");
+        let colors = [[240, 20, 20], [20, 240, 20], [20, 20, 240], [240, 240, 20]];
+        for (orientation, corners) in [
+            (1, [0, 1, 2, 3]),
+            (2, [1, 0, 3, 2]),
+            (3, [3, 2, 1, 0]),
+            (4, [2, 3, 0, 1]),
+            (5, [0, 2, 1, 3]),
+            (6, [2, 0, 3, 1]),
+            (7, [3, 1, 2, 0]),
+            (8, [1, 3, 0, 2]),
+        ] {
+            let source = oriented_jpeg(64, 32, orientation);
+            std::fs::write(&path, &source).unwrap();
+            let preview = super::load_preview(&path).unwrap();
+            let markdown = import_images(
+                &directory.path().join("note.md"),
+                "assets",
+                &[ImageInput::File(path.clone())],
+            )
+            .unwrap();
+            let url = markdown
+                .rsplit_once("](")
+                .unwrap()
+                .1
+                .strip_suffix(')')
+                .unwrap();
+            let imported = super::local_image_path(directory.path(), url).unwrap();
+            assert_eq!(super::load_preview(&imported).unwrap(), preview);
+            assert_eq!(std::fs::read(imported).unwrap(), source);
+            let dimensions = if orientation >= 5 { (32, 64) } else { (64, 32) };
+            assert_eq!(
+                preview.dimensions(),
+                dimensions,
+                "orientation {orientation}"
+            );
+            for (index, (x, y)) in [(1, 1), (3, 1), (1, 3), (3, 3)].into_iter().enumerate() {
+                let pixel = preview.get_pixel(preview.width() * x / 4, preview.height() * y / 4);
+                for channel in 0..3 {
+                    assert!(
+                        pixel[channel].abs_diff(colors[corners[index]][channel]) < 10,
+                        "orientation {orientation}, corner {index}, pixel {pixel:?}"
+                    );
+                }
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn portrait_preview_bounds_upload_size_and_preserves_aspect_ratio() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.jpg");
+        std::fs::write(&path, oriented_jpeg(2000, 1000, 6)).unwrap();
+        assert_eq!(
+            super::load_preview(&path).unwrap().dimensions(),
+            (800, 1600)
+        );
+    }
+
+    #[gpui::test]
+    fn preview_loads_asynchronously_reuses_bitmap_and_reloads_changed_file(
+        cx: &mut TestAppContext,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("image.png");
+        image::RgbaImage::new(40, 20).save(&path).unwrap();
+        cx.update(|cx| {
+            cx.set_global(super::PreviewImages::default());
+            for _ in 0..10 {
+                assert!(
+                    super::load_image(&path, cx).is_err(),
+                    "request must not decode inline"
+                );
+            }
+        });
+        cx.run_until_parked();
+        let first = cx.update(|cx| super::load_image(&path, cx).unwrap());
+        cx.run_until_parked();
+        let cached = cx.update(|cx| super::load_image(&path, cx).unwrap());
+        assert!(std::sync::Arc::ptr_eq(&first, &cached));
+        cx.run_until_parked();
+        image::RgbaImage::new(20, 60).save(&path).unwrap();
+        cx.update(|cx| {
+            assert!(std::sync::Arc::ptr_eq(
+                &first,
+                &super::load_image(&path, cx).unwrap()
+            ));
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let changed = super::load_image(&path, cx).unwrap();
+            assert_eq!(
+                (changed.size(0).width.0, changed.size(0).height.0),
+                (20, 60)
+            );
+            assert!(!std::sync::Arc::ptr_eq(&first, &changed));
+        });
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn image_previews_center_in_writing_column(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        image::RgbaImage::new(80, 40)
+            .save(directory.path().join("photo.png"))
+            .unwrap();
+        let (view, window) = cx.add_window_view(|window, cx| {
+            Workspace::new(
+                Config::default(),
+                None,
+                Document::untitled("outside\n![Image](photo.png)\n![Sized](photo.png \"120px\")"),
+                Explorer::open(directory.path()).unwrap(),
+                window,
+                cx,
+            )
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            let mut surface = Surface {
+                workspace: view.clone(),
+                pane: Pane::Editor,
+            };
+            for width in [300., 1000.] {
+                let prepared = surface.prepaint(
+                    None,
+                    None,
+                    Bounds::new(point(px(40.), px(0.)), size(px(width), px(2000.))),
+                    &mut (),
+                    window,
+                    cx,
+                );
+                assert_eq!(prepared.images.len(), 2);
+                for (bounds, _) in &prepared.images {
+                    let row = &prepared.layout.rows[1];
+                    let left = bounds.left() - row.origin.x;
+                    let right = row.origin.x + prepared.layout.text_width - bounds.right();
+                    assert!((f32::from(left - right)).abs() < 0.01);
+                    assert!(left >= px(0.));
+                }
+            }
+        });
+    }
 
     #[gpui::test]
     fn code_block_background_covers_wrapped_rows(cx: &mut TestAppContext) {
