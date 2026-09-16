@@ -6,7 +6,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 impl Workspace {
     pub(super) fn type_text(&mut self, text: &str) {
-        if self.help || self.theme_picker.is_some() {
+        if self.help || self.theme_picker.is_some() || self.ui_mode_picker.is_some() {
             return;
         }
         if self.outline_picker.is_some() {
@@ -75,7 +75,7 @@ impl Workspace {
         }
     }
     fn replace_input(&mut self, range: Option<Range<usize>>, text: &str) {
-        if self.help || self.theme_picker.is_some() {
+        if self.help || self.theme_picker.is_some() || self.ui_mode_picker.is_some() {
             return;
         }
         if let Some(picker) = &mut self.outline_picker {
@@ -193,7 +193,7 @@ impl EntityInputHandler for Workspace {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.help || self.theme_picker.is_some() {
+        if self.help || self.theme_picker.is_some() || self.ui_mode_picker.is_some() {
             return;
         }
         let start = range.as_ref().or(self.marked.as_ref()).map_or_else(

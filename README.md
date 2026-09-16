@@ -142,14 +142,37 @@ Press **F1** or enter `:help` for the in-app reference. Browse Editing, Navigati
 | `Cmd-W` / `Ctrl-Shift-W` | Close the current editor buffer, prompting to Save / Discard / Cancel if needed. |
 | `F1` | Toggle the keyboard guide. |
 | `Cmd-Shift-O` / `Ctrl-Shift-O` | Toggle the searchable document outline. |
+| `Cmd-Shift-M` / `Ctrl-Shift-M` | Open the Dev / Writer mode selector. |
 
-Click a pane to focus it. In Markdown, clicks place the caret near the clicked text and preserve Insert mode; dragging or double-clicking a word creates a Vim Visual selection. Active prose stays wrapped, and Insert-mode Up/Down move between visual rows. The **terminal icon** is at the bottom-left; the **folder** and **circled question-mark** icons at the bottom-right toggle Files and Help. Hover for a tooltip identifying the action; icons stay highlighted while their dock or guide is open. Footer buttons, buffer tabs, and tab-close controls have distinct hover and pressed highlights. The macOS title bar centers **Rockdown — {buffer name}** and updates when you switch or save a buffer under a new name.
+Click a pane to focus it. In Markdown, clicks place the caret near the clicked text and preserve Insert mode; dragging or double-clicking a word creates a Vim Visual selection. Active prose stays wrapped, and Insert-mode Up/Down move between visual rows. In **Dev Mode**, footer controls toggle Outline, Files, and Help; an open terminal also has a Hide Terminal control. Hover for a tooltip identifying the action; icons stay highlighted while their dock or guide is open. Footer buttons, buffer tabs, and tab-close controls have distinct hover and pressed highlights. The macOS title bar centers **Rockdown — {buffer name}** and updates when you switch or save a buffer under a new name.
+
+### Dev and Writer modes
+
+Use the **Dev / Writer** control at the top-right, **Cmd/Ctrl-Shift-M**, or `:uimode`.
+Select a mode with the mouse or **↑/↓** (also **j/k**), then **Enter**; **Esc** or
+clicking outside closes the selector. The mode is session-only and starts in **Dev**.
+
+- **Dev** retains the docked workspace, tab bar, status bar, and existing visibility settings.
+- **Writer** hides fixed bars and panels. Translucent, rounded floating controls replace them:
+  - Bottom-left Vim indicator shows **N**, **I**, or **V** only.
+  - Bottom-right **Outline / Files / Help** group opens dismissible floating windows.
+  - Files retains Vim editing, staged changes, navigation, and `:w` commits.
+    **Esc** in Files Normal mode dismisses it; in Insert mode, the first Esc returns to Normal.
+  - The terminal shortcut still works, opening a floating terminal (**T** indicator).
+    Close it with its × control or **Ctrl-backtick**.
+
+Switching modes preserves document edits and staged Files changes. Returning to Dev
+restores its prior Files/Terminal visibility without restarting the shell.
+Writer's editor fills the window behind its floating controls without reserved top/bottom bands.
+The mode control keeps the same size and position in both modes.
+Commands, searches, and notifications appear as floating feedback without resizing the page.
+Themes have **no button in either mode**; use **Cmd/Ctrl-Shift-T** or `:theme`.
 
 ## Markdown editing
 
 ### Document outline and section links
 
-Click **Outline** in the footer, press **Cmd/Ctrl-Shift-O**, or enter `:outline`.
+Click **Outline** in the Dev footer or Writer bubble group, press **Cmd/Ctrl-Shift-O**, or enter `:outline`.
 The dismissible navigator lists the current Markdown document's headings with
 their hierarchy and current-section indication. Type to filter heading titles
 (including Chinese IME input), use Up/Down to select and Enter to jump, or click a
@@ -569,6 +592,7 @@ terminal
 editor
 help
 themes
+ui-mode
 outline
 tab-bar
 status-bar
@@ -616,7 +640,7 @@ additional public APIs.
 | Document lifecycle, recovery, image import | `src/app/{documents,recovery,images}.rs` |
 | Actions, keyboard routing, IME/text input | `src/app/{commands,keyboard,text_input}.rs` |
 | Pane focus, pointer interaction, scrolling | `src/app/{panes,navigation}.rs` |
-| Workspace chrome, panels, rendering | `src/app/{chrome,help,outline_picker,themes,render}.rs` |
+| Workspace chrome, panels, rendering | `src/app/{chrome,help,outline_picker,themes,ui_mode,render}.rs` |
 | Buffer state and shared text primitives | `src/vim.rs` |
 | Vim key dispatch, motions, operators | `src/vim/{keys,motions,operators}.rs` |
 | Editing, clipboard, selection, undo, substitution | `src/vim/{editing,clipboard,selection,history,substitution}.rs` |

@@ -25,6 +25,7 @@ mod recovery;
 mod render;
 mod text_input;
 mod themes;
+mod ui_mode;
 
 actions!(
     rockdown,
@@ -39,6 +40,7 @@ actions!(
         EditorPane,
         HelpToggle,
         ThemesToggle,
+        UiModeToggle,
         OutlineToggle,
         TabBarToggle,
         StatusBarToggle,
@@ -64,6 +66,7 @@ pub fn bind_config_keys(config: &Config, cx: &mut App) {
             "editor" => Box::new(EditorPane),
             "help" => Box::new(HelpToggle),
             "themes" => Box::new(ThemesToggle),
+            "ui-mode" => Box::new(UiModeToggle),
             "outline" => Box::new(OutlineToggle),
             "tab-bar" => Box::new(TabBarToggle),
             "status-bar" => Box::new(StatusBarToggle),
@@ -110,12 +113,21 @@ struct OutlinePicker {
     input_line: Option<ShapedLine>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UiMode {
+    Dev,
+    Writer,
+}
+
 pub struct Workspace {
     pub config: Config,
     pub config_path: Option<PathBuf>,
     pub documents: crate::documents::Documents,
     pub explorer: Explorer,
     pub explorer_visible: bool,
+    ui_mode: UiMode,
+    ui_mode_picker: Option<UiMode>,
+    dev_panes: (bool, bool),
     explorer_resize: Option<(Pixels, f32)>,
     mouse_anchor: Option<(Pane, usize, usize)>,
     preferred_visual_x: Option<Pixels>,
@@ -188,6 +200,9 @@ impl Workspace {
             documents: crate::documents::Documents::new(document),
             explorer,
             explorer_visible,
+            ui_mode: UiMode::Dev,
+            ui_mode_picker: None,
+            dev_panes: (false, false),
             explorer_resize: None,
             mouse_anchor: None,
             preferred_visual_x: None,

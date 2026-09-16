@@ -1,7 +1,7 @@
 use super::{
     BufferDelete, EditorPane, ExplorerToggle, HelpToggle, NewDocument, NextBuffer, OpenDocument,
     OutlineToggle, Pane, Paste, PreviousBuffer, Save, SaveAs, StatusBarToggle, TabBarToggle,
-    TerminalToggle, ThemesToggle, Workspace,
+    TerminalToggle, ThemesToggle, UiMode, UiModeToggle, Workspace,
 };
 use crate::vim::Mode;
 use gpui::{prelude::*, *};
@@ -25,6 +25,7 @@ impl Render for Workspace {
         let foreground = self.color(&self.config.theme.foreground);
         let muted = self.color(&self.config.theme.muted);
         let accent = self.color(&self.config.theme.accent);
+        let writer = self.ui_mode == UiMode::Writer;
         let mode = if self.pane == Pane::Terminal {
             "TERMINAL"
         } else {
@@ -60,6 +61,7 @@ impl Render for Workspace {
         let window_title = format!("Rockdown — {buffer_name}");
         window.set_window_title(&window_title);
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -103,6 +105,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ThemesToggle, window, cx| {
                 this.run_action("themes", window, cx)
             }))
+            .on_action(cx.listener(|this, _: &UiModeToggle, window, cx| {
+                this.run_action("ui-mode", window, cx)
+            }))
             .on_action(cx.listener(|this, _: &OutlineToggle, window, cx| {
                 this.run_action("outline", window, cx)
             }))
@@ -133,13 +138,15 @@ impl Render for Workspace {
             .when(self.explorer_resize.is_some(), |root| {
                 root.cursor(CursorStyle::ResizeLeftRight)
             })
-            .when(cfg!(target_os = "macos"), |root| {
+            .when(cfg!(target_os = "macos") && !writer, |root| {
                 root.child(
                     div()
                         .id("window-title")
+                        .debug_selector(|| "window-title".into())
                         .h(px(40.))
                         .flex_shrink_0()
                         .px(px(80.))
+                        .pr(px(144.))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -158,6 +165,24 @@ impl Render for Workspace {
                 )
             })
             .child(
+                // The transparent drag region keeps the native window movable
+                // without bringing back a title bar in Writer Mode.
+                div()
+                    .absolute()
+                    .top_0()
+                    .left(px(80.))
+                    .right(px(144.))
+                    .h(px(if writer { 8. } else { 40. }))
+                    .window_control_area(WindowControlArea::Drag)
+                    .on_mouse_down(MouseButton::Left, |event, window, _| {
+                        if event.click_count == 2 {
+                            window.zoom_window();
+                        } else {
+                            window.start_window_move();
+                        }
+                    }),
+            )
+            .child(
                 div()
                     .flex_1()
                     .min_h_0()
@@ -168,7 +193,7 @@ impl Render for Workspace {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .when(self.config.tab_bar_visible, |column| {
+                            .when(self.config.tab_bar_visible && !writer, |column| {
                                 column.child(self.buffer_bar(cx))
                             })
                             .child(
@@ -186,7 +211,7 @@ impl Render for Workspace {
                                 ),
                             ),
                     )
-                    .when(self.explorer_visible, |body| {
+                    .when(self.explorer_visible && !writer, |body| {
                         body.child(
                             div()
                                 .w(px(explorer_width))
@@ -257,7 +282,7 @@ impl Render for Workspace {
                         )
                     }),
             )
-            .when(self.terminal_visible, |root| {
+            .when(self.terminal_visible && !writer, |root| {
                 root.child(
                     div()
                         .h(px(self.config.terminal_height))
@@ -306,10 +331,19 @@ impl Render for Workspace {
                         .border_color(accent)
                         .text_color(foreground)
                         .text_size(px(12.))
+                        .when(writer, |notice| {
+                            notice
+                                .absolute()
+                                .top(px(52.))
+                                .left(px(80.))
+                                .right(px(144.))
+                                .rounded_lg()
+                                .shadow_lg()
+                        })
                         .child(error),
                 )
             })
-            .when(self.config.status_bar_visible, |root| {
+            .when(self.config.status_bar_visible && !writer, |root| {
                 root.child(
                     div()
                         .id("status-bar")
@@ -381,7 +415,7 @@ impl Render for Workspace {
                 )
             })
             .when(
-                !self.config.status_bar_visible
+                (!self.config.status_bar_visible || writer)
                     && (self.command.is_some() || !self.message.is_empty()),
                 |root| {
                     root.child(
@@ -394,6 +428,17 @@ impl Render for Workspace {
                             .flex()
                             .gap_3()
                             .bg(panel)
+                            .when(writer, |feedback| {
+                                feedback
+                                    .absolute()
+                                    .bottom(px(16.))
+                                    .left(px(68.))
+                                    .right(px(192.))
+                                    .rounded_xl()
+                                    .border_1()
+                                    .border_color(muted.opacity(0.25))
+                                    .shadow_lg()
+                            })
                             .child(div().flex_1().min_w_0().child(
                                 self.command.clone().unwrap_or_else(|| self.message.clone()),
                             ))
@@ -413,6 +458,12 @@ impl Render for Workspace {
                     )
                 },
             )
+            .when(writer && self.explorer_visible, |root| {
+                root.child(self.writer_pane(Pane::Explorer, window, cx))
+            })
+            .when(writer && self.terminal_visible, |root| {
+                root.child(self.writer_pane(Pane::Terminal, window, cx))
+            })
             .when(self.help, |root| root.child(self.help_panel(cx)))
             .when(self.theme_picker.is_some(), |root| {
                 root.child(self.theme_selector(cx))
@@ -420,5 +471,10 @@ impl Render for Workspace {
             .when(self.outline_picker.is_some(), |root| {
                 root.child(self.outline_panel(cx))
             })
+            .when(writer, |root| root.child(self.writer_chrome(mode, cx)))
+            .when(self.ui_mode_picker.is_some(), |root| {
+                root.child(self.ui_mode_selector(cx))
+            })
+            .child(self.ui_mode_control(cx))
     }
 }

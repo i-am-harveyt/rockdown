@@ -1,4 +1,4 @@
-use super::{Pane, Workspace, help::HELP};
+use super::{Pane, UiMode, Workspace, help::HELP};
 use crate::{markdown, terminal::key_bytes, vim::Mode};
 use anyhow::Result;
 use gpui::*;
@@ -11,7 +11,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.theme_picker.is_none() && self.outline_picker.is_none() {
+        if self.theme_picker.is_none()
+            && self.outline_picker.is_none()
+            && self.ui_mode_picker.is_none()
+        {
             self.follow_cursor = true;
             self.viewport_alignment = None;
         }
@@ -47,6 +50,20 @@ impl Workspace {
         let key = crate::keyboard::key(stroke);
         if stroke.modifiers.platform && stroke.key == "q" {
             self.request_window_close(window, cx);
+            return Ok(true);
+        }
+        if let Some(selected) = self.ui_mode_picker {
+            match key {
+                "escape" => self.ui_mode_picker = None,
+                "enter" => self.set_ui_mode(selected, window, cx),
+                "up" | "down" | "j" | "k" | "tab" => {
+                    self.ui_mode_picker = Some(match selected {
+                        UiMode::Dev => UiMode::Writer,
+                        UiMode::Writer => UiMode::Dev,
+                    });
+                }
+                _ => {}
+            }
             return Ok(true);
         }
         let clipboard_shortcut =
@@ -136,6 +153,12 @@ impl Workspace {
                 _ => {}
             }
             return Ok(true);
+        }
+        if self.ui_mode == UiMode::Writer && key == "escape" && self.command.is_none() {
+            if self.pane == Pane::Explorer && self.buffer().mode == Mode::Normal {
+                self.set_pane(Pane::Editor, cx);
+                return Ok(true);
+            }
         }
         if clipboard_shortcut && stroke.key == "c" && self.pane != Pane::Terminal {
             let buffer = self.buffer();

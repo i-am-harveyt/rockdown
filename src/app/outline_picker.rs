@@ -1,4 +1,4 @@
-use super::{OutlinePicker, Pane, Workspace};
+use super::{OutlinePicker, Pane, UiMode, Workspace};
 use gpui::{prelude::*, *};
 
 impl Workspace {
@@ -115,6 +115,10 @@ impl Workspace {
                     .border_1()
                     .border_color(muted.opacity(0.25))
                     .shadow_lg()
+                    .when(self.ui_mode == UiMode::Writer, |card| {
+                        card.bg(panel.opacity(0.96))
+                            .border_color(foreground.opacity(0.2))
+                    })
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()

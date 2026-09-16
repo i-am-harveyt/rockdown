@@ -1,4 +1,4 @@
-use super::{Pane, Workspace};
+use super::{Pane, UiMode, Workspace};
 use crate::surface::Surface;
 use gpui::{prelude::*, *};
 
@@ -22,6 +22,10 @@ impl Workspace {
             .bg(panel)
             .border_b_1()
             .border_color(muted.opacity(0.12))
+            .when(
+                self.ui_mode == UiMode::Dev && !cfg!(target_os = "macos"),
+                |tabs| tabs.pr(px(144.)),
+            )
             .text_xs()
             .children(self.documents.entries().iter().map(|entry| {
                 let id = entry.id;
@@ -151,6 +155,15 @@ impl Workspace {
             }))
             .hover(|style| style.bg(accent.opacity(0.2)).text_color(accent))
             .active(|style| style.bg(accent.opacity(0.3)))
+            .when(self.ui_mode == UiMode::Writer, |button| {
+                button
+                    .size(px(40.))
+                    .rounded_full()
+                    .bg(background.opacity(0.88))
+                    .border_1()
+                    .border_color(foreground.opacity(0.24))
+                    .shadow_md()
+            })
             .tooltip(move |_, cx| {
                 cx.new(|_| ControlTooltip {
                     label: label.into(),
@@ -218,7 +231,10 @@ impl Workspace {
                 )
                 .size(px(20.)),
             )
-            .when(action == "outline", |button| button.child("Outline"))
+            .when(
+                action == "outline" && self.ui_mode == UiMode::Dev,
+                |button| button.child("Outline"),
+            )
     }
     pub(super) fn surface(&self, pane: Pane, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -249,6 +265,7 @@ impl Workspace {
                 surface.on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                     if !this.help
                         && this.theme_picker.is_none()
+                        && this.ui_mode_picker.is_none()
                         && this.outline_picker.is_none()
                         && this.command.is_none()
                     {
