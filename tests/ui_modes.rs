@@ -410,6 +410,21 @@ fn writer_tool_popups_share_bottom_anchor_at_short_and_tall_window_sizes(cx: &mu
         assert!(files.top() >= px(0.));
         assert!(help.top() >= px(0.));
         click(&mut window, "close-help");
+        let tool_gap = window.debug_bounds("help").unwrap().top() - help.bottom();
+        click(&mut window, "writer-tabs-toggle");
+        let tabs = window.debug_bounds("writer-tabs-popup").unwrap();
+        assert_eq!(
+            window.debug_bounds("writer-tabs-toggle").unwrap().top() - tabs.bottom(),
+            tool_gap
+        );
+        window.simulate_keystrokes("escape");
+        for mode in ["ui-mode-dev", "ui-mode-writer"] {
+            click(&mut window, "ui-mode-control");
+            let selector = window.debug_bounds("ui-mode-selector").unwrap();
+            let button = window.debug_bounds("ui-mode-control").unwrap();
+            assert_eq!(selector.top() - button.bottom(), tool_gap);
+            click(&mut window, mode);
+        }
     }
 }
 

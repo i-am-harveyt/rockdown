@@ -1,7 +1,8 @@
 use super::{Pane, UiMode, Workspace};
 use gpui::{prelude::*, *};
 
-pub(super) const WRITER_POPUP_BOTTOM: f32 = 76.;
+const POPUP_GAP: f32 = 20.;
+pub(super) const WRITER_POPUP_BOTTOM: f32 = 16. + 40. + POPUP_GAP;
 pub(super) const WRITER_POPUP_TOP: f32 = 52.;
 
 impl Workspace {
@@ -142,7 +143,7 @@ impl Workspace {
                     .id("ui-mode-selector")
                     .debug_selector(|| "ui-mode-selector".into())
                     .absolute()
-                    .top(px(68.))
+                    .top(px(4. + 32. + POPUP_GAP))
                     .right(px(16.))
                     .w(px(264.))
                     .rounded_xl()
