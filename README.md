@@ -154,7 +154,7 @@ clicking outside closes the selector. The mode is session-only and starts in **D
 
 - **Dev** retains the docked workspace, tab bar, status bar, and existing visibility settings.
 - **Writer** hides fixed bars and panels. Translucent, rounded floating controls replace them:
-  - Bottom-left Vim indicator shows **N**, **I**, or **V** only.
+  - Bottom-left Vim indicator shows **N**, **I**, or **V**. Hover to see the full mode, such as **Vim Mode: Normal** or **Vim Mode: Visual Line**; the Dev status-bar indicator provides the same tooltip.
   - **Tabs**, immediately to its right, opens a scrollable vertical document list above it.
     Click a document to switch, use its × to close it, or dismiss the popup with **Esc** / an outside click.
   - **Hide** hides the floating controls and closes open tools; **Show** restores the controls.
@@ -211,7 +211,7 @@ it does not open remote links, build a cross-file index, or fetch anything.
 | `0`, `$` | Move to the beginning/end of the line. |
 | `gg`, `G` | Move to the beginning/end of the document. |
 | `Ctrl-D`, `Ctrl-U` | Move cursor and viewport down/up by half a pane. A count sets the number of lines for subsequent half-page motions in that buffer. |
-| `zz`, `zt` | Center the current line or place it at the top without moving the cursor. A count first selects that line, e.g. `40zz`. |
+| `zz`, `zt` | Center the current line or place it at the top without moving the cursor. The editor can scroll into half a pane of blank space above the document, so even the first line can be centered. A count first selects that line, e.g. `40zz`. |
 | `x`, `dd`, `dw`, `d$` | Delete a character, line, word, or through the end of the line. |
 | `cc`, `cw` | Change a line or word and enter Insert mode. |
 | `yy`, `p`, `P` | Yank a line; paste after/before the cursor. |

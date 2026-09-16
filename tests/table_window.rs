@@ -242,6 +242,52 @@ fn viewport_alignment_centers_wrapped_rows_and_top_aligns_without_moving_cursor(
     window.run_until_parked();
     assert!(cursor_y(&mut window) < centered);
     assert_eq!(hit_rows(&mut window, &view)[0].0, 39);
+    // The document boundary must not pin the first line to the pane's top.
+    window.simulate_keystrokes("g g z z");
+    window.run_until_parked();
+    let first_y = |window: &mut VisualTestContext| {
+        window.update(|_, cx| {
+            let app = view.read(cx);
+            assert_eq!(app.documents.current().buffer.row, 0);
+            f32::from(app.layouts[Pane::Editor.index()].rows[0].origin.y)
+        })
+    };
+    assert!((first_y(&mut window) - centered).abs() < 1.);
+    window.simulate_keystrokes("i");
+    window.simulate_input("X");
+    window.run_until_parked();
+    assert!((first_y(&mut window) - centered).abs() < 1.);
+    window.simulate_keystrokes("escape z t");
+    window.run_until_parked();
+    assert!(first_y(&mut window) < centered);
+    window.update(|_, cx| {
+        view.update(cx, |app, cx| {
+            app.scroll(
+                Pane::Editor,
+                &gpui::ScrollWheelEvent {
+                    delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(10000.))),
+                    ..Default::default()
+                },
+                cx,
+            );
+        });
+    });
+    window.run_until_parked();
+    assert!((first_y(&mut window) - centered).abs() < 1.);
+    window.update(|_, cx| {
+        view.update(cx, |app, cx| {
+            app.scroll(
+                Pane::Editor,
+                &gpui::ScrollWheelEvent {
+                    delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-30.))),
+                    ..Default::default()
+                },
+                cx,
+            );
+        });
+    });
+    window.run_until_parked();
+    assert!((first_y(&mut window) - (centered - 30.)).abs() < 1.);
 }
 
 #[gpui::test]

@@ -240,13 +240,13 @@ impl Workspace {
                     .absolute()
                     .bottom(px(16.))
                     .left(px(16.))
-                    .h(px(32.))
-                    .px_3()
+                    .size(px(40.))
                     .rounded_full()
                     .flex()
                     .items_center()
                     .justify_center()
                     .text_size(px(11.))
+                    .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
                     .occlude()
                     .hover(|style| style.bg(accent.opacity(0.2)))
@@ -275,6 +275,7 @@ impl Workspace {
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(accent)
+                    .tooltip(self.mode_tooltip())
                     .child(&mode[..1]),
             )
             .child(

@@ -89,6 +89,7 @@ fn queued_offscreen_images_do_not_evict_visible_previews_forever(cx: &mut TestAp
         )
     });
     let mut window = window.clone();
+    window.simulate_keystrokes("z t");
     // Loading placeholders initially expose more than one cache's worth of
     // rows; loaded images then push most of those requests below the viewport.
     window.simulate_resize(size(px(1000.), px(2400.)));

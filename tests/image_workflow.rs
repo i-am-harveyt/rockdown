@@ -93,6 +93,7 @@ fn assets(base: &Path, source: &str) -> Vec<PathBuf> {
 fn clipboard_action_imports_portable_preview_and_one_undo_redo(cx: &mut TestAppContext) {
     let original = "\n\nafter";
     let (dir, mut window, view) = editor(cx, original, Some("md"));
+    window.simulate_keystrokes("z t");
     put_image(&mut window);
     window.simulate_keystrokes("ctrl-shift-v");
     window.run_until_parked();

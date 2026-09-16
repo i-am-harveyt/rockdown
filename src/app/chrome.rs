@@ -1,8 +1,33 @@
 use super::{Pane, UiMode, Workspace};
-use crate::surface::Surface;
+use crate::{surface::Surface, vim::Mode};
 use gpui::{prelude::*, *};
 
 impl Workspace {
+    pub(super) fn mode_tooltip(&self) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+        let label = if self.pane == Pane::Terminal {
+            "Terminal"
+        } else {
+            match self.buffer().mode {
+                Mode::Normal => "Vim Mode: Normal",
+                Mode::Insert => "Vim Mode: Insert",
+                Mode::Visual => "Vim Mode: Visual",
+                Mode::VisualLine => "Vim Mode: Visual Line",
+            }
+        };
+        let background = self.color(&self.config.theme.background);
+        let foreground = self.color(&self.config.theme.foreground);
+        let border = self.color(&self.config.theme.accent).opacity(0.3);
+        move |_, cx| {
+            cx.new(|_| ControlTooltip {
+                label: label.into(),
+                background,
+                foreground,
+                border,
+            })
+            .into()
+        }
+    }
+
     pub(super) fn buffer_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.documents.active_id();
         let accent = self.color(&self.config.theme.accent);

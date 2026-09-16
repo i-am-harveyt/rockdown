@@ -268,7 +268,11 @@ impl RecoveryStore {
             document.buffer.restore_cursor(stored.row, stored.col);
             let top = stored.top.min(document.buffer.lines.len() - 1);
             let offset = if top == stored.top && stored.offset.is_finite() {
-                stored.offset.max(0.)
+                if top == 0 {
+                    stored.offset
+                } else {
+                    stored.offset.max(0.)
+                }
             } else {
                 0.
             };
@@ -345,7 +349,11 @@ impl RecoveryStore {
                 col: entry.document.buffer.col,
                 top: entry.viewport.top,
                 offset: if entry.viewport.offset.is_finite() {
-                    entry.viewport.offset.max(0.)
+                    if entry.viewport.top == 0 {
+                        entry.viewport.offset
+                    } else {
+                        entry.viewport.offset.max(0.)
+                    }
                 } else {
                     0.
                 },
@@ -605,6 +613,10 @@ mod tests {
         fs::write(&path, "\u{feff}one\r\ntwo\r\n").unwrap();
         let mut documents = Documents::new(Document::untitled("initial"));
         documents.current_mut().buffer.insert_text("unsaved ");
+        *documents.viewport_mut() = Viewport {
+            top: 0,
+            offset: -180.,
+        };
         documents.open(&path).unwrap();
         documents.current_mut().buffer.key("A");
         documents.current_mut().buffer.insert_text(" edited");
@@ -644,6 +656,8 @@ mod tests {
         recovered.previous();
         assert!(recovered.current().path.is_none());
         assert_eq!(recovered.current().buffer.text(), "unsaved initial");
+        assert_eq!(recovered.viewport().top, 0);
+        assert_eq!(recovered.viewport().offset, -180.);
         assert!(recovered.current().buffer.dirty());
         recovered.current_mut().buffer.key("0");
         recovered.current_mut().buffer.key("d");
