@@ -16,6 +16,8 @@ pub struct Config {
     pub writing_width: f32,
     /// Show source line numbers in Markdown documents.
     pub markdown_line_numbers: bool,
+    pub tab_bar_visible: bool,
+    pub status_bar_visible: bool,
     /// Portable document-relative directory for imported image files.
     pub image_assets_dir: String,
     pub terminal_height: f32,
@@ -464,6 +466,8 @@ impl Default for Config {
             explorer_width: 290.,
             writing_width: 820.,
             markdown_line_numbers: false,
+            tab_bar_visible: true,
+            status_bar_visible: true,
             image_assets_dir: "assets".into(),
             terminal_height: 240.,
             shell: std::env::var(if cfg!(windows) { "COMSPEC" } else { "SHELL" })
@@ -489,6 +493,10 @@ impl Default for Config {
                 ("ctrl-shift-t".into(), "themes".into()),
                 ("cmd-shift-o".into(), "outline".into()),
                 ("ctrl-shift-o".into(), "outline".into()),
+                ("cmd-alt-t".into(), "tab-bar".into()),
+                ("ctrl-alt-t".into(), "tab-bar".into()),
+                ("cmd-alt-s".into(), "status-bar".into()),
+                ("ctrl-alt-s".into(), "status-bar".into()),
                 ("ctrl-`".into(), "terminal".into()),
                 ("cmd-1".into(), "editor".into()),
                 ("ctrl-1".into(), "editor".into()),
@@ -688,6 +696,8 @@ impl Config {
                 "terminal",
                 "themes",
                 "outline",
+                "tab-bar",
+                "status-bar",
                 "editor",
                 "help",
                 "buffer-delete",

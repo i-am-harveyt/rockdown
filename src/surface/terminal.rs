@@ -35,7 +35,7 @@ impl Surface {
             if let Some(terminal) = &mut app.terminal
                 && let Err(error) = terminal.resize(rows, cols)
             {
-                app.message = error.to_string();
+                app.set_message(error.to_string());
             }
         });
         let app = self.workspace.read(cx);

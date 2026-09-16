@@ -1,13 +1,25 @@
 use super::{
     BufferDelete, EditorPane, ExplorerToggle, HelpToggle, NewDocument, NextBuffer, OpenDocument,
-    OutlineToggle, Pane, Paste, PreviousBuffer, Save, SaveAs, TerminalToggle, ThemesToggle,
-    Workspace,
+    OutlineToggle, Pane, Paste, PreviousBuffer, Save, SaveAs, StatusBarToggle, TabBarToggle,
+    TerminalToggle, ThemesToggle, Workspace,
 };
 use crate::vim::Mode;
 use gpui::{prelude::*, *};
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.message_expiry_pending) {
+            let timer = cx
+                .background_executor()
+                .timer(std::time::Duration::from_secs(5));
+            self.message_expiry_task = Some(cx.spawn(async move |this, cx| {
+                timer.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.message.clear();
+                    cx.notify();
+                });
+            }));
+        }
         let background = self.color(&self.config.theme.background);
         let panel = self.color(&self.config.theme.panel);
         let foreground = self.color(&self.config.theme.foreground);
@@ -31,7 +43,6 @@ impl Render for Workspace {
                 .count()
                 + 1
         );
-        let status = self.command.clone().unwrap_or_else(|| self.message.clone());
         let explorer_width = self.explorer_width(window);
         let explorer_label = if self.explorer_visible {
             "Hide Files"
@@ -95,6 +106,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &OutlineToggle, window, cx| {
                 this.run_action("outline", window, cx)
             }))
+            .on_action(cx.listener(|this, _: &TabBarToggle, window, cx| {
+                this.run_action("tab-bar", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &StatusBarToggle, window, cx| {
+                this.run_action("status-bar", window, cx)
+            }))
             .on_action(cx.listener(|this, _: &PreviousBuffer, window, cx| {
                 this.run_action("previous-buffer", window, cx)
             }))
@@ -151,10 +168,14 @@ impl Render for Workspace {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .child(self.buffer_bar(cx))
+                            .when(self.config.tab_bar_visible, |column| {
+                                column.child(self.buffer_bar(cx))
+                            })
                             .child(
                                 div().flex_1().min_h_0().flex().justify_center().child(
                                     div()
+                                        .id("editor-column")
+                                        .debug_selector(|| "editor-column".into())
                                         .w_full()
                                         .min_w_0()
                                         .h_full()
@@ -288,84 +309,130 @@ impl Render for Workspace {
                         .child(error),
                 )
             })
-            .child(
-                div()
-                    .h(px(38.))
-                    .flex_shrink_0()
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .bg(panel)
-                    .border_t_1()
-                    .border_color(muted.opacity(0.12))
-                    .text_size(px(11.))
-                    .child(
+            .when(self.config.status_bar_visible, |root| {
+                root.child(
+                    div()
+                        .id("status-bar")
+                        .debug_selector(|| "status-bar".into())
+                        .h(px(38.))
+                        .flex_shrink_0()
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .bg(panel)
+                        .border_t_1()
+                        .border_color(muted.opacity(0.12))
+                        .text_size(px(11.))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .bg(accent.opacity(0.1))
+                                .text_color(accent)
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(mode),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .text_color(if self.command.is_some() {
+                                    foreground
+                                } else {
+                                    muted
+                                })
+                                .child(
+                                    self.command.clone().unwrap_or_else(|| self.message.clone()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_color(muted)
+                                .font_family(self.config.font_family.clone())
+                                .child(location),
+                        )
+                        .child(
+                            div()
+                                .id("themes")
+                                .px_2()
+                                .h(px(26.))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .debug_selector(|| "themes".into())
+                                .text_color(muted)
+                                .hover(|style| {
+                                    style.bg(accent.opacity(0.12)).text_color(foreground)
+                                })
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.run_action("themes", window, cx)
+                                }))
+                                .child(div().size(px(8.)).rounded_full().bg(accent))
+                                .child("Theme"),
+                        )
+                        .child(self.dock_button(
+                            "Outline",
+                            "outline",
+                            self.outline_picker.is_some(),
+                            cx,
+                        ))
+                        .when(self.terminal_visible, |footer| {
+                            footer.child(self.dock_button("Hide Terminal", "terminal", true, cx))
+                        })
+                        .child(self.dock_button(
+                            explorer_label,
+                            "explorer",
+                            self.explorer_visible,
+                            cx,
+                        ))
+                        .child(self.dock_button(
+                            if self.help { "Hide Help" } else { "Show Help" },
+                            "help",
+                            self.help,
+                            cx,
+                        )),
+                )
+            })
+            .when(
+                !self.config.status_bar_visible
+                    && (self.command.is_some() || !self.message.is_empty()),
+                |root| {
+                    root.child(
                         div()
+                            .id("command-feedback")
+                            .debug_selector(|| "command-feedback".into())
                             .flex_shrink_0()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .bg(accent.opacity(0.1))
-                            .text_color(accent)
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(mode),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .text_color(if self.command.is_some() {
-                                foreground
-                            } else {
-                                muted
-                            })
-                            .child(status),
-                    )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_color(muted)
-                            .font_family(self.config.font_family.clone())
-                            .child(location),
-                    )
-                    .child(
-                        div()
-                            .id("themes")
-                            .px_2()
-                            .h(px(26.))
+                            .px_3()
+                            .py_2()
                             .flex()
-                            .items_center()
-                            .gap_2()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .debug_selector(|| "themes".into())
-                            .text_color(muted)
-                            .hover(|style| style.bg(accent.opacity(0.12)).text_color(foreground))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.run_action("themes", window, cx)
-                            }))
-                            .child(div().size(px(8.)).rounded_full().bg(accent))
-                            .child("Theme"),
+                            .gap_3()
+                            .bg(panel)
+                            .child(div().flex_1().min_w_0().child(
+                                self.command.clone().unwrap_or_else(|| self.message.clone()),
+                            ))
+                            .when(self.command.is_none(), |feedback| {
+                                feedback.child(
+                                    div()
+                                        .id("dismiss-feedback")
+                                        .debug_selector(|| "dismiss-feedback".into())
+                                        .cursor_pointer()
+                                        .child("×")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.set_message(String::new());
+                                            cx.notify();
+                                        })),
+                                )
+                            }),
                     )
-                    .child(self.dock_button(
-                        "Outline",
-                        "outline",
-                        self.outline_picker.is_some(),
-                        cx,
-                    ))
-                    .when(self.terminal_visible, |footer| {
-                        footer.child(self.dock_button("Hide Terminal", "terminal", true, cx))
-                    })
-                    .child(self.dock_button(explorer_label, "explorer", self.explorer_visible, cx))
-                    .child(self.dock_button(
-                        if self.help { "Hide Help" } else { "Show Help" },
-                        "help",
-                        self.help,
-                        cx,
-                    )),
+                },
             )
             .when(self.help, |root| root.child(self.help_panel(cx)))
             .when(self.theme_picker.is_some(), |root| {

@@ -154,6 +154,49 @@ impl Workspace {
                                     .text_color(muted)
                                     .child(section.summary),
                             )
+                            .when(section.title == "Appearance", |content| {
+                                content.child(
+                                    div().flex().gap_2().mb_3().children(
+                                        [
+                                            ("tab-bar", "Tab bar", self.config.tab_bar_visible),
+                                            (
+                                                "status-bar",
+                                                "Status bar",
+                                                self.config.status_bar_visible,
+                                            ),
+                                        ]
+                                        .into_iter()
+                                        .map(
+                                            |(action, label, visible)| {
+                                                div()
+                                                    .id(action)
+                                                    .debug_selector(move || action.into())
+                                                    .px_3()
+                                                    .py_2()
+                                                    .rounded_md()
+                                                    .cursor_pointer()
+                                                    .bg(panel)
+                                                    .text_color(if visible {
+                                                        accent
+                                                    } else {
+                                                        muted
+                                                    })
+                                                    .hover(|style| style.bg(muted.opacity(0.12)))
+                                                    .child(format!(
+                                                        "{label}: {}",
+                                                        if visible { "Shown" } else { "Hidden" }
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _, window, cx| {
+                                                            this.run_action(action, window, cx);
+                                                            cx.stop_propagation();
+                                                        },
+                                                    ))
+                                            },
+                                        ),
+                                    ),
+                                )
+                            })
                             .children(section.shortcuts.iter().enumerate().map(
                                 |(index, (keys, description))| {
                                     div()
@@ -396,6 +439,8 @@ pub(super) const HELP: &[HelpSection] = &[
         title: "Appearance",
         summary: "Make the workspace yours without interrupting your writing.",
         shortcuts: &[
+            ("Ctrl/Cmd-Alt-T · :tabbar", "Show / hide the tab bar"),
+            ("Ctrl/Cmd-Alt-S · :statusbar", "Show / hide the status bar"),
             (
                 "Ctrl/Cmd-Shift-T",
                 "Open the live theme picker; also available in the footer",
@@ -407,6 +452,7 @@ pub(super) const HELP: &[HelpSection] = &[
             ("--config PATH", "Launch with an explicit TOML config"),
         ],
         notes: &[
+            "Bar toggles last for this session. Set tab_bar_visible and status_bar_visible in your config for startup; :config restores those settings. Notifications disappear after five seconds (× dismisses sooner); new notifications restart the timer. Command/search input never expires, even when the status bar is hidden.",
             "Rockdown and Paper are built in. Add colorscheme/*.toml beside your config file for other themes; reopen the picker to discover changes. Set [theme] preset to the filename without .toml for startup.",
             "Theme choices are session-only and replace Markdown color overrides, not typography. Current theme or cancel restores custom colors; :config reloads the configured theme and its file.",
             r"Config location: ~/.config/rockdown/config.toml on Unix; %APPDATA%\rockdown\config.toml on Windows. XDG_CONFIG_HOME overrides the base directory.",

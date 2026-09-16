@@ -37,7 +37,7 @@ impl Workspace {
         } else if let Some(text) = item.text() {
             self.type_text(&text);
         } else if has_images {
-            self.message = "Images can only be inserted into a Markdown editor (.md)".into();
+            self.set_message("Images can only be inserted into a Markdown editor (.md)".into());
             cx.notify();
         }
     }
@@ -66,12 +66,12 @@ impl Workspace {
             return;
         }
         if !self.accepts_images() {
-            self.message = "Images can only be inserted into a Markdown editor (.md)".into();
+            self.set_message("Images can only be inserted into a Markdown editor (.md)".into());
             cx.notify();
             return;
         }
         if self.dialog_pending {
-            self.message = "Finish the open dialog before inserting images".into();
+            self.set_message("Finish the open dialog before inserting images".into());
             cx.notify();
             return;
         }
@@ -79,7 +79,7 @@ impl Workspace {
         let document = self.documents.current();
         if document.path.is_some() {
             if let Err(error) = self.start_image_import(id, inputs, None, cx) {
-                self.message = format!("Image import failed: {error:#}");
+                self.set_message(format!("Image import failed: {error:#}"));
             }
             cx.notify();
             return;
@@ -88,7 +88,7 @@ impl Workspace {
         let caret = (document.buffer.row, document.buffer.col);
         let receiver = cx.prompt_for_new_path(&self.explorer.directory, Some("Untitled.md"));
         self.dialog_pending = true;
-        self.message = "Save this document as Markdown to insert images".into();
+        self.set_message("Save this document as Markdown to insert images".into());
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let result = receiver.await;
@@ -115,13 +115,13 @@ impl Workspace {
                     })(),
                     Ok(Err(error)) => Err(error),
                     _ => {
-                        this.message = "Image insertion cancelled".into();
+                        this.set_message("Image insertion cancelled".into());
                         cx.notify();
                         return;
                     }
                 };
                 if let Err(error) = result {
-                    this.message = format!("Image import failed: {error:#}");
+                    this.set_message(format!("Image import failed: {error:#}"));
                 }
                 cx.notify();
             });
@@ -152,7 +152,7 @@ impl Workspace {
         let caret = caret.unwrap_or((document.buffer.row, document.buffer.col));
         let count = inputs.len();
         let assets_dir = self.config.image_assets_dir.clone();
-        self.message = format!("Importing {count} image(s)…");
+        self.set_message(format!("Importing {count} image(s)…"));
         cx.notify();
         let worker_path = path.clone();
         let task = cx
@@ -174,13 +174,13 @@ impl Workspace {
                     }
                     this.finish_image_import(id, &text, caret, cx)
                 });
-                this.message = match result {
+                this.set_message(match result {
                     Ok(()) => format!("Inserted {count} local image(s)"),
                     Err(error) if imported => {
                         format!("Imported {count} local image(s); insertion skipped: {error:#}")
                     }
                     Err(error) => format!("Image import failed: {error:#}"),
-                };
+                });
                 // Copying can succeed even when a concurrent document change
                 // prevents inserting the links. Files still needs the new assets.
                 if imported {

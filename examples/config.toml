@@ -6,6 +6,9 @@ line_height = 30
 # Markdown column maximum in logical pixels (320–1600); shrinks with the window.
 writing_width = 820
 markdown_line_numbers = false
+# Hide either bar at startup; F1 → Appearance or the shortcuts below toggle it.
+tab_bar_visible = true
+status_bar_visible = true
 # Pasted/dropped images are copied beside the Markdown file into this child path.
 image_assets_dir = "assets"
 explorer_width = 290
@@ -72,6 +75,7 @@ thickness = 1.5
 # Specifying keys replaces the default shortcut map.
 # Supported actions: new, open, save, save-as, paste (clipboard), explorer (toggle),
 # terminal, editor, help, themes, outline, buffer-delete, previous-buffer, next-buffer.
+# tab-bar, status-bar.
 [keys]
 cmd-n = "new"
 ctrl-n = "new"
@@ -97,3 +101,7 @@ cmd-shift-t = "themes"
 ctrl-shift-t = "themes"
 cmd-shift-o = "outline"
 ctrl-shift-o = "outline"
+cmd-alt-t = "tab-bar"
+ctrl-alt-t = "tab-bar"
+cmd-alt-s = "status-bar"
+ctrl-alt-s = "status-bar"

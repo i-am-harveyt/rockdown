@@ -19,7 +19,7 @@ impl Workspace {
         match result {
             Ok(false) => return,
             Ok(true) => {}
-            Err(error) => self.message = format!("{error:#}"),
+            Err(error) => self.set_message(format!("{error:#}")),
         }
         if let Some((text, linewise)) = self.buffer_mut().take_yank() {
             cx.write_to_clipboard(ClipboardItem::new_string_with_metadata(

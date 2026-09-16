@@ -17,6 +17,25 @@ Rockdown uses **line-based live preview** for `.md` files (case-insensitive) and
 
 Markdown uses a maximum column width of 820 logical pixels, shrinking to fit smaller windows. Set `writing_width` (320–1600) and `markdown_line_numbers = true` in your TOML configuration to adjust the layout. Plain-text documents retain full-width editing and line numbers. A dot beside a tab name indicates unsaved changes. Toggle Files with Ctrl-E (Cmd-E on macOS) and the terminal with Ctrl-`; F1 opens the keyboard guide.
 
+Hide chrome independently without changing the rest of the layout:
+
+| Control | macOS | Windows / Linux | Command |
+|---|---|---|---|
+| Toggle tab bar | `Cmd-Alt-T` | `Ctrl-Alt-T` | `:tabbar` |
+| Toggle status bar | `Cmd-Alt-S` | `Ctrl-Alt-S` | `:statusbar` |
+
+You can also open **F1 → Appearance** and click **Tab bar** or **Status bar**.
+Both bars are shown by default. Toggles apply to the current session; set
+`tab_bar_visible = false` and/or `status_bar_visible = false` at the top level of
+your TOML config to start with them hidden. `:config` restores the configured
+visibility. Hiding tabs does not close documents; buffer shortcuts still work.
+When the status bar is hidden, command/search input and operation messages
+appear in a compact feedback row. Notifications automatically disappear after
+five seconds; a new notification restarts the timer, even if its text is identical.
+Click **×** to dismiss one sooner. Command/search input never expires, and the
+status bar stays hidden. F1 and the theme, outline, Files, and terminal shortcuts
+remain available.
+
 ## Build and run
 
 ### Requirements
@@ -551,6 +570,8 @@ editor
 help
 themes
 outline
+tab-bar
+status-bar
 buffer-delete
 previous-buffer
 next-buffer

@@ -153,11 +153,12 @@ impl Workspace {
                     if let Some(row) = outline::resolve_anchor(&self.headings, link) {
                         self.jump_to_heading(row, window, cx);
                     } else {
-                        self.message = format!("No heading matches {link}");
+                        self.set_message(format!("No heading matches {link}"));
                     }
                 } else {
-                    self.message =
-                        "Only #fragment links within this document are navigated.".into();
+                    self.set_message(
+                        "Only #fragment links within this document are navigated.".into(),
+                    );
                 }
                 cx.stop_propagation();
                 cx.notify();

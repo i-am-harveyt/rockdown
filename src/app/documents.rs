@@ -26,18 +26,19 @@ impl Workspace {
         self.viewport_needs_measurement = true;
         self.set_pane(Pane::Editor, cx);
         self.follow_cursor = false;
-        self.message = format!(
+        self.set_message(format!(
             "Buffer {} · {} open",
             self.documents.active_id(),
             self.documents.entries().len()
-        );
+        ));
         self.checkpoint_recovery(cx);
         Ok(())
     }
     pub fn can_close(&mut self, cx: &mut Context<Self>) -> bool {
         if self.documents.dirty() || self.explorer.dirty() {
-            self.message =
-                "Unsaved changes. Save with :w, or discard all and close with :q!".into();
+            self.set_message(
+                "Unsaved changes. Save with :w, or discard all and close with :q!".into(),
+            );
             cx.notify();
             false
         } else {
@@ -65,11 +66,11 @@ impl Workspace {
                             && let Err(error) =
                                 this.change_document(|documents| documents.open(path), cx)
                         {
-                            this.message = format!("{error:#}");
+                            this.set_message(format!("{error:#}"));
                         }
                     }
-                    Ok(Err(error)) => this.message = format!("{error:#}"),
-                    _ => this.message = "Open cancelled".into(),
+                    Ok(Err(error)) => this.set_message(format!("{error:#}")),
+                    _ => this.set_message("Open cancelled".into()),
                 }
                 cx.notify();
             });
@@ -114,8 +115,8 @@ impl Workspace {
                 this.dialog_pending = false;
                 match result {
                     Ok(Ok(Some(path))) => this.finish_save(id, Some(&path), close, window, cx),
-                    Ok(Err(error)) => this.message = format!("{error:#}"),
-                    _ => this.message = "Save cancelled".into(),
+                    Ok(Err(error)) => this.set_message(format!("{error:#}")),
+                    _ => this.set_message("Save cancelled".into()),
                 }
                 cx.notify();
             });
@@ -134,14 +135,14 @@ impl Workspace {
         match self.documents.save_id(id, path) {
             Ok(()) => {
                 self.refresh_projection();
-                self.message = format!(
+                self.set_message(format!(
                     "Saved {}",
                     self.documents
                         .get(id)
                         .and_then(|doc| doc.path.as_ref())
                         .unwrap()
                         .display()
-                );
+                ));
                 if !self.explorer.dirty()
                     && let Err(error) = self.explorer.reload()
                 {
@@ -152,7 +153,7 @@ impl Workspace {
                     self.request_close(target, discarded, window, cx);
                 }
             }
-            Err(error) => self.message = format!("{error:#}"),
+            Err(error) => self.set_message(format!("{error:#}")),
         }
         cx.notify();
     }
@@ -249,7 +250,7 @@ impl Workspace {
                                 this.refresh_projection();
                                 this.request_close(target, discarded, window, cx);
                             }
-                            Err(error) => this.message = format!("{error:#}"),
+                            Err(error) => this.set_message(format!("{error:#}")),
                         }
                     }
                     Ok(0) => this.save_dialog(id, false, Some((target, discarded)), window, cx),
@@ -258,7 +259,7 @@ impl Workspace {
                         discarded.push((id, snapshot));
                         this.request_close(target, discarded, window, cx);
                     }
-                    _ => this.message = "Close cancelled".into(),
+                    _ => this.set_message("Close cancelled".into()),
                 }
                 cx.notify();
             });
@@ -274,12 +275,12 @@ impl Workspace {
             let report = self.explorer.commit()?;
             self.documents.reconcile(&report);
             self.refresh_projection();
-            self.message = format!(
+            self.set_message(format!(
                 "Explorer saved: {} created, {} renamed, {} moved to .rockdown-trash",
                 report.created.len(),
                 report.renamed.len(),
                 report.deleted.len()
-            );
+            ));
         } else {
             let target = path.map(|p| {
                 if p.is_absolute() {
@@ -290,10 +291,10 @@ impl Workspace {
             });
             self.documents.save(target.as_deref(), force)?;
             self.refresh_projection();
-            self.message = format!(
+            self.set_message(format!(
                 "Saved {}",
                 self.documents.current().path.as_ref().unwrap().display()
-            );
+            ));
             if !self.explorer.dirty() {
                 self.explorer.reload()?;
             }
@@ -319,7 +320,7 @@ impl Workspace {
             cx,
         );
         if let Err(error) = result {
-            self.message = error.to_string();
+            self.set_message(error.to_string());
         }
         self.focus.focus(window);
         cx.notify();
