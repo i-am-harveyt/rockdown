@@ -417,7 +417,7 @@ An invalid selected config produces an error on startup or reload. Project-local
 
 ### Colorscheme files and live preview
 
-Click **Theme** in the footer, press **Ctrl/Cmd-Shift-T**, or run `:theme`.
+Press **Ctrl/Cmd-Shift-T** or run `:theme` to open the theme picker.
 Hover a palette or use **↑/↓**, **j/k**, or **Tab** to preview it immediately.
 Click or press **Enter** to keep it; **Esc** or clicking outside cancels and restores
 the exact previous palette. **Current theme** preserves your custom colors.

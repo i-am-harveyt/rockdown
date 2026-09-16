@@ -357,27 +357,6 @@ impl Render for Workspace {
                                 .font_family(self.config.font_family.clone())
                                 .child(location),
                         )
-                        .child(
-                            div()
-                                .id("themes")
-                                .px_2()
-                                .h(px(26.))
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .debug_selector(|| "themes".into())
-                                .text_color(muted)
-                                .hover(|style| {
-                                    style.bg(accent.opacity(0.12)).text_color(foreground)
-                                })
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.run_action("themes", window, cx)
-                                }))
-                                .child(div().size(px(8.)).rounded_full().bg(accent))
-                                .child("Theme"),
-                        )
                         .child(self.dock_button(
                             "Outline",
                             "outline",

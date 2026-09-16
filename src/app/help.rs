@@ -441,10 +441,7 @@ pub(super) const HELP: &[HelpSection] = &[
         shortcuts: &[
             ("Ctrl/Cmd-Alt-T · :tabbar", "Show / hide the tab bar"),
             ("Ctrl/Cmd-Alt-S · :statusbar", "Show / hide the status bar"),
-            (
-                "Ctrl/Cmd-Shift-T",
-                "Open the live theme picker; also available in the footer",
-            ),
+            ("Ctrl/Cmd-Shift-T", "Open the live theme picker"),
             (":theme", "Preview a built-in or file colorscheme"),
             ("↑ / ↓ · j / k", "Preview themes; hover works too"),
             ("Enter / Esc", "Keep a theme / cancel the preview"),
