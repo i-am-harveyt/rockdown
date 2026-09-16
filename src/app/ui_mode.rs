@@ -275,6 +275,7 @@ impl Workspace {
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(accent)
+                    .tooltip(self.mode_tooltip())
                     .child(&mode[..1]),
             )
             .child(

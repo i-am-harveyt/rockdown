@@ -154,7 +154,7 @@ clicking outside closes the selector. The mode is session-only and starts in **D
 
 - **Dev** retains the docked workspace, tab bar, status bar, and existing visibility settings.
 - **Writer** hides fixed bars and panels. Translucent, rounded floating controls replace them:
-  - Bottom-left Vim indicator shows **N**, **I**, or **V** only.
+  - Bottom-left Vim indicator shows **N**, **I**, or **V**. Hover to see the full mode, such as **Vim Mode: Normal** or **Vim Mode: Visual Line**; the Dev status-bar indicator provides the same tooltip.
   - **Tabs**, immediately to its right, opens a scrollable vertical document list above it.
     Click a document to switch, use its × to close it, or dismiss the popup with **Esc** / an outside click.
   - **Hide** hides the floating controls and closes open tools; **Show** restores the controls.

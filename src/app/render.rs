@@ -358,6 +358,8 @@ impl Render for Workspace {
                         .text_size(px(11.))
                         .child(
                             div()
+                                .id("vim-mode-indicator")
+                                .debug_selector(|| "vim-mode-indicator".into())
                                 .flex_shrink_0()
                                 .px_2()
                                 .py_1()
@@ -365,6 +367,7 @@ impl Render for Workspace {
                                 .bg(accent.opacity(0.1))
                                 .text_color(accent)
                                 .font_weight(FontWeight::MEDIUM)
+                                .tooltip(self.mode_tooltip())
                                 .child(mode),
                         )
                         .child(
