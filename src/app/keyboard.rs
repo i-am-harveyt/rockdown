@@ -161,11 +161,15 @@ impl Workspace {
             }
             return Ok(true);
         }
-        if self.ui_mode == UiMode::Writer && key == "escape" && self.command.is_none()
-            && self.pane == Pane::Explorer && self.buffer().mode == Mode::Normal {
-                self.set_pane(Pane::Editor, cx);
-                return Ok(true);
-            }
+        if self.ui_mode == UiMode::Writer
+            && key == "escape"
+            && self.command.is_none()
+            && self.pane == Pane::Explorer
+            && self.buffer().mode == Mode::Normal
+        {
+            self.set_pane(Pane::Editor, cx);
+            return Ok(true);
+        }
         if clipboard_shortcut && stroke.key == "c" && self.pane != Pane::Terminal {
             let buffer = self.buffer();
             let mut selected = buffer
