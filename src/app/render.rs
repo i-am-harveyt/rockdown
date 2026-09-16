@@ -205,7 +205,7 @@ impl Render for Workspace {
                                         .min_w_0()
                                         .h_full()
                                         .when(self.documents.current().is_markdown(), |column| {
-                                            column.max_w(px(self.config.writing_width)).py_6()
+                                            column.max_w(px(self.config.writing_width))
                                         })
                                         .child(self.surface(Pane::Editor, cx)),
                                 ),
@@ -355,8 +355,6 @@ impl Render for Workspace {
                         .items_center()
                         .gap_3()
                         .bg(panel)
-                        .border_t_1()
-                        .border_color(muted.opacity(0.12))
                         .text_size(px(11.))
                         .child(
                             div()

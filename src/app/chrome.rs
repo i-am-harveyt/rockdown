@@ -20,11 +20,8 @@ impl Workspace {
             .gap_2()
             .overflow_x_scroll()
             .bg(panel)
-            .border_b_1()
-            .border_color(muted.opacity(0.12))
             .when(self.ui_mode == UiMode::Writer, |tabs| {
                 tabs.bg(transparent_black())
-                    .border_b_0()
                     .h_auto()
                     .min_h_0()
                     .flex_1()
