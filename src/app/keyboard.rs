@@ -1,5 +1,5 @@
 use super::{Pane, Workspace, help::HELP};
-use crate::{config::ThemePreset, markdown, terminal::key_bytes, vim::Mode};
+use crate::{markdown, terminal::key_bytes, vim::Mode};
 use anyhow::Result;
 use gpui::*;
 use unicode_segmentation::UnicodeSegmentation;
@@ -113,7 +113,7 @@ impl Workspace {
         }
         if let Some(picker) = &self.theme_picker {
             let selected = picker.selected;
-            let count = ThemePreset::ALL.len() + 1;
+            let count = picker.presets.len() + 1;
             match key {
                 "escape" => self.finish_theme_picker(false, cx),
                 "enter" => self.finish_theme_picker(true, cx),
@@ -122,6 +122,9 @@ impl Workspace {
                 "home" => self.preview_theme(0, cx),
                 "end" => self.preview_theme(count - 1, cx),
                 _ => {}
+            }
+            if let Some(picker) = &self.theme_picker {
+                picker.scroll.scroll_to_item(picker.selected);
             }
             return Ok(true);
         }

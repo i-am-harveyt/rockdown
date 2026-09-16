@@ -30,79 +30,112 @@ pub struct Config {
 pub enum ThemePreset {
     #[default]
     Rockdown,
-    Nord,
-    Dracula,
-    Gruvbox,
     Paper,
-    SolarizedLight,
 }
 
 impl ThemePreset {
-    pub const ALL: &'static [Self] = &[
-        Self::Rockdown,
-        Self::Nord,
-        Self::Dracula,
-        Self::Gruvbox,
-        Self::Paper,
-        Self::SolarizedLight,
-    ];
+    pub const ALL: &'static [Self] = &[Self::Rockdown, Self::Paper];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Rockdown => "Rockdown",
-            Self::Nord => "Nord",
-            Self::Dracula => "Dracula",
-            Self::Gruvbox => "Gruvbox",
             Self::Paper => "Paper",
-            Self::SolarizedLight => "Solarized Light",
         }
     }
 
     pub fn id(self) -> &'static str {
         match self {
             Self::Rockdown => "rockdown",
-            Self::Nord => "nord",
-            Self::Dracula => "dracula",
-            Self::Gruvbox => "gruvbox",
             Self::Paper => "paper",
-            Self::SolarizedLight => "solarized-light",
         }
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|preset| preset.id() == id)
     }
 
     pub fn theme(self) -> Theme {
-        ThemeOverlay {
-            preset: self,
-            ..ThemeOverlay::default()
+        let [background, panel, foreground, muted, accent] = match self {
+            Self::Rockdown => ["#171b22", "#1e242e", "#dce3ec", "#8995a7", "#9cc7b5"],
+            Self::Paper => ["#faf9f6", "#eeede9", "#292929", "#6b6b67", "#356d61"],
+        };
+        Theme {
+            preset: self.id().into(),
+            name: self.name().into(),
+            background: background.into(),
+            panel: panel.into(),
+            foreground: foreground.into(),
+            muted: muted.into(),
+            accent: accent.into(),
+            base: self,
+            syntax: [None; 10],
+            ansi: None,
+            markdown: ThemeMarkdown::default(),
         }
-        .into_theme()
     }
 
-    fn colors(self) -> [&'static str; 5] {
-        match self {
-            Self::Rockdown => ["#171b22", "#1e242e", "#dce3ec", "#8995a7", "#9cc7b5"],
-            Self::Nord => ["#2e3440", "#3b4252", "#eceff4", "#a3b1c6", "#88c0d0"],
-            Self::Dracula => ["#282a36", "#343746", "#f8f8f2", "#a5acc9", "#bd93f9"],
-            Self::Gruvbox => ["#282828", "#3c3836", "#ebdbb2", "#a89984", "#b8bb26"],
-            Self::Paper => ["#faf9f6", "#eeede9", "#292929", "#6b6b67", "#356d61"],
-            Self::SolarizedLight => ["#fdf6e3", "#eee8d5", "#586e75", "#657b83", "#007d76"],
+    fn syntax_palette(self, dark: bool) -> [u32; 10] {
+        match (self, dark) {
+            (Self::Rockdown, true) => [
+                0xdce3ec, 0x8995a7, 0xe09a9a, 0xd8af85, 0xd8cd9b, 0x9cc7b5, 0x95c5ca, 0x9cbbe0,
+                0xc3a8dc, 0xc5a390,
+            ],
+            (Self::Rockdown, false) => [
+                0x29313c, 0x586779, 0x983c46, 0x895322, 0x766018, 0x356d61, 0x286b72, 0x365f91,
+                0x72508e, 0x79513c,
+            ],
+            (Self::Paper, true) => [
+                0xe8e6df, 0xa8a69e, 0xd99286, 0xd3ac7f, 0xc9bf89, 0x94b8a2, 0x8db8b4, 0x94adc7,
+                0xb3a0bd, 0xbea18c,
+            ],
+            (Self::Paper, false) => [
+                0x292929, 0x6b6b67, 0x983f35, 0x825724, 0x756323, 0x356d61, 0x326a68, 0x3f6086,
+                0x75547e, 0x78583e,
+            ],
+        }
+    }
+
+    fn ansi_palette(self, dark: bool) -> [u32; 16] {
+        match (self, dark) {
+            (Self::Rockdown, true) => [
+                0x20242b, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xdce3ec,
+                0x687385, 0xff8590, 0xb4e68e, 0xffd990, 0x89c8ff, 0xdda0ff, 0x85dbe5, 0xffffff,
+            ],
+            (Self::Rockdown, false) => [
+                0x20242b, 0xa83240, 0x426b28, 0x805a12, 0x2465a0, 0x85439b, 0x21727d, 0xdce3ec,
+                0x687385, 0xbc3445, 0x477827, 0x90671a, 0x276eae, 0x9449ad, 0x237e89, 0xffffff,
+            ],
+            (Self::Paper, true) => [
+                0x292929, 0xd88078, 0x9db787, 0xd6b66e, 0x8caecb, 0xba98b9, 0x89bcb0, 0xeeede9,
+                0x777773, 0xe9968f, 0xb0ca9a, 0xe8c982, 0x9fc2df, 0xcdaacb, 0x9cd0c3, 0xfaf9f6,
+            ],
+            (Self::Paper, false) => [
+                0x292929, 0x9b3b35, 0x4b6b38, 0x84671f, 0x365f85, 0x795177, 0x356d61, 0xeeede9,
+                0x6b6b67, 0xad413b, 0x557b3d, 0x927325, 0x3e6e99, 0x8b5c88, 0x3c7e70, 0xfaf9f6,
+            ],
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
-    pub preset: ThemePreset,
+    pub preset: String,
+    pub name: String,
     pub background: String,
     pub panel: String,
     pub foreground: String,
     pub muted: String,
     pub accent: String,
+    base: ThemePreset,
+    syntax: [Option<u32>; 10],
+    ansi: Option<[u32; 16]>,
+    markdown: ThemeMarkdown,
 }
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct ThemeOverlay {
-    preset: ThemePreset,
+    preset: Option<String>,
     background: Option<String>,
     panel: Option<String>,
     foreground: Option<String>,
@@ -111,22 +144,32 @@ struct ThemeOverlay {
 }
 
 impl ThemeOverlay {
-    fn into_theme(self) -> Theme {
-        let [background, panel, foreground, muted, accent] = self.preset.colors();
-        Theme {
-            preset: self.preset,
-            background: self.background.unwrap_or_else(|| background.into()),
-            panel: self.panel.unwrap_or_else(|| panel.into()),
-            foreground: self.foreground.unwrap_or_else(|| foreground.into()),
-            muted: self.muted.unwrap_or_else(|| muted.into()),
-            accent: self.accent.unwrap_or_else(|| accent.into()),
+    fn apply(self, theme: &mut Theme) {
+        for (target, value) in [
+            (&mut theme.background, self.background),
+            (&mut theme.panel, self.panel),
+            (&mut theme.foreground, self.foreground),
+            (&mut theme.muted, self.muted),
+            (&mut theme.accent, self.accent),
+        ] {
+            if let Some(value) = value {
+                *target = value;
+            }
         }
     }
 }
 
 impl<'de> Deserialize<'de> for Theme {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        ThemeOverlay::deserialize(deserializer).map(ThemeOverlay::into_theme)
+        let overlay = ThemeOverlay::deserialize(deserializer)?;
+        let id = overlay.preset.as_deref().unwrap_or("rockdown");
+        let mut theme = ThemePreset::from_id(id)
+            .ok_or_else(|| {
+                serde::de::Error::custom("Custom themes require Config::parse or Config::load")
+            })?
+            .theme();
+        overlay.apply(&mut theme);
+        Ok(theme)
     }
 }
 
@@ -143,6 +186,204 @@ impl Theme {
         };
         // Relative luminance where black and white have equal contrast.
         0.2126 * linear(16) + 0.7152 * linear(8) + 0.0722 * linear(0) < 0.179
+    }
+
+    /// Foreground, comment, variable, constant, type, string, escape, function,
+    /// keyword, and embedded-source colors, in that order.
+    pub fn syntax_palette(&self) -> [u32; 10] {
+        let inherited = self.base.syntax_palette(self.is_dark());
+        std::array::from_fn(|index| self.syntax[index].unwrap_or(inherited[index]))
+    }
+
+    pub fn ansi_palette(&self) -> [u32; 16] {
+        self.ansi
+            .unwrap_or_else(|| self.base.ansi_palette(self.is_dark()))
+    }
+
+    /// Replace colors, including clearing old overrides, without changing typography.
+    pub fn apply_markdown_colors(&self, markdown: &mut MarkdownStyle) {
+        markdown.colors.clone_from(&self.markdown.colors);
+        for (heading, color) in [
+            (&mut markdown.h1, &self.markdown.h1.color),
+            (&mut markdown.h2, &self.markdown.h2.color),
+            (&mut markdown.h3, &self.markdown.h3.color),
+            (&mut markdown.h4, &self.markdown.h4.color),
+            (&mut markdown.h5, &self.markdown.h5.color),
+            (&mut markdown.h6, &self.markdown.h6.color),
+        ] {
+            heading.color.clone_from(color);
+        }
+        markdown
+            .divider
+            .color
+            .clone_from(&self.markdown.divider.color);
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ThemeFile {
+    name: Option<String>,
+    base: ThemePreset,
+    theme: ThemeOverlay,
+    syntax: SyntaxColors,
+    terminal: TerminalColors,
+    markdown: ThemeMarkdown,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(try_from = "String")]
+struct PaletteColor(u32);
+
+impl TryFrom<String> for PaletteColor {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self> {
+        parse_color(&value).map(Self)
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct SyntaxColors {
+    foreground: Option<PaletteColor>,
+    comment: Option<PaletteColor>,
+    variable: Option<PaletteColor>,
+    constant: Option<PaletteColor>,
+    #[serde(rename = "type")]
+    type_color: Option<PaletteColor>,
+    string: Option<PaletteColor>,
+    escape: Option<PaletteColor>,
+    function: Option<PaletteColor>,
+    keyword: Option<PaletteColor>,
+    embedded: Option<PaletteColor>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TerminalColors {
+    ansi: Option<Vec<PaletteColor>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+struct ThemeMarkdown {
+    colors: MarkdownColors,
+    h1: MarkdownColor,
+    h2: MarkdownColor,
+    h3: MarkdownColor,
+    h4: MarkdownColor,
+    h5: MarkdownColor,
+    h6: MarkdownColor,
+    divider: MarkdownColor,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+struct MarkdownColor {
+    color: Option<String>,
+}
+
+impl ThemeFile {
+    fn load(path: &Path, id: &str) -> Result<Theme> {
+        let load = || -> Result<Theme> {
+            validate_theme_id(id)?;
+            if ThemePreset::from_id(id).is_some() {
+                bail!("Colorscheme ID '{id}' is reserved for a built-in theme");
+            }
+            let text = std::fs::read_to_string(path).context("Reading colorscheme")?;
+            let file: Self = toml::from_str(&text)?;
+            if file.theme.preset.is_some() {
+                bail!("Colorschemes use 'base', not 'theme.preset'");
+            }
+            let mut theme = file.base.theme();
+            theme.preset = id.into();
+            theme.name = file.name.unwrap_or_else(|| id.into());
+            file.theme.apply(&mut theme);
+            let syntax = file.syntax;
+            theme.syntax = [
+                syntax.foreground,
+                syntax.comment,
+                syntax.variable,
+                syntax.constant,
+                syntax.type_color,
+                syntax.string,
+                syntax.escape,
+                syntax.function,
+                syntax.keyword,
+                syntax.embedded,
+            ]
+            .map(|color| color.map(|color| color.0));
+            theme.ansi = file
+                .terminal
+                .ansi
+                .map(|colors| -> Result<_> {
+                    let colors: [PaletteColor; 16] =
+                        colors.try_into().map_err(|colors: Vec<_>| {
+                            anyhow::anyhow!(
+                                "terminal.ansi requires exactly 16 colors, got {}",
+                                colors.len()
+                            )
+                        })?;
+                    Ok(colors.map(|color| color.0))
+                })
+                .transpose()?;
+            theme.markdown = file.markdown;
+            for (name, color) in [
+                ("theme.background", &theme.background),
+                ("theme.panel", &theme.panel),
+                ("theme.foreground", &theme.foreground),
+                ("theme.muted", &theme.muted),
+                ("theme.accent", &theme.accent),
+            ] {
+                parse_color(color).with_context(|| name)?;
+            }
+            let colors = &theme.markdown.colors;
+            for (name, color) in [
+                ("markdown.colors.normal", &colors.normal),
+                ("markdown.colors.bold", &colors.bold),
+                ("markdown.colors.italic", &colors.italic),
+                ("markdown.colors.bold_italic", &colors.bold_italic),
+                ("markdown.colors.code", &colors.code),
+                ("markdown.colors.link", &colors.link),
+                ("markdown.colors.strikethrough", &colors.strikethrough),
+                ("markdown.colors.quote", &colors.quote),
+                ("markdown.h1.color", &theme.markdown.h1.color),
+                ("markdown.h2.color", &theme.markdown.h2.color),
+                ("markdown.h3.color", &theme.markdown.h3.color),
+                ("markdown.h4.color", &theme.markdown.h4.color),
+                ("markdown.h5.color", &theme.markdown.h5.color),
+                ("markdown.h6.color", &theme.markdown.h6.color),
+                ("markdown.divider.color", &theme.markdown.divider.color),
+            ] {
+                if let Some(color) = color {
+                    parse_color(color).with_context(|| name)?;
+                }
+            }
+            Ok(theme)
+        };
+        load().with_context(|| format!("Loading colorscheme {}", path.display()))
+    }
+}
+
+fn validate_theme_id(id: &str) -> Result<()> {
+    if id.is_empty()
+        || id == "."
+        || id == ".."
+        || id.contains(['/', '\\', ':'])
+        || id.chars().any(char::is_control)
+    {
+        bail!("Invalid colorscheme ID '{id}': expected a filename stem");
+    }
+    Ok(())
+}
+
+fn colorscheme_directory(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(path) => Some(path.parent().unwrap_or(Path::new("")).join("colorscheme")),
+        None => {
+            config_base(|name| std::env::var_os(name)).map(|base| base.join("rockdown/colorscheme"))
+        }
     }
 }
 
@@ -172,7 +413,7 @@ impl MarkdownStyle {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct MarkdownColors {
     pub normal: Option<String>,
@@ -278,18 +519,104 @@ impl Config {
             Some(path) => {
                 let text = std::fs::read_to_string(path)
                     .with_context(|| format!("Reading {}", path.display()))?;
-                Self::parse(path, &text).with_context(|| format!("Loading {}", path.display()))?
+                Self::parse(path, &text)?
             }
         };
-        config.validate()?;
+        config.validate().with_context(|| match &path {
+            Some(path) => format!("Loading {}", path.display()),
+            None => "Validating default configuration".into(),
+        })?;
         Ok((config, path))
     }
 
     pub fn parse(path: &Path, text: &str) -> Result<Self> {
-        match path.extension().and_then(|e| e.to_str()) {
-            Some("toml") => Ok(toml::from_str(text)?),
-            _ => bail!("Configuration must have a .toml extension"),
+        let parse = || -> Result<Self> {
+            if path.extension().and_then(|extension| extension.to_str()) != Some("toml") {
+                bail!("Configuration must have a .toml extension");
+            }
+            let mut table: toml::Table = toml::from_str(text)?;
+            let overlay: ThemeOverlay = table
+                .remove("theme")
+                .map(toml::Value::try_into)
+                .transpose()?
+                .unwrap_or_default();
+            let mut config: Self = toml::Value::Table(table).try_into()?;
+            let id = overlay.preset.as_deref().unwrap_or("rockdown");
+            validate_theme_id(id)?;
+            let mut theme = match ThemePreset::from_id(id) {
+                Some(preset) => preset.theme(),
+                None => {
+                    let directory =
+                        colorscheme_directory(Some(path)).expect("explicit config path");
+                    ThemeFile::load(&directory.join(format!("{id}.toml")), id)?
+                }
+            };
+            overlay.apply(&mut theme);
+            // Config colors override only explicitly supplied values; typography
+            // belongs to the config and is never inherited from a colorscheme.
+            let colors = &mut config.markdown.colors;
+            let inherited = &theme.markdown;
+            for (color, fallback) in [
+                (&mut colors.normal, &inherited.colors.normal),
+                (&mut colors.bold, &inherited.colors.bold),
+                (&mut colors.italic, &inherited.colors.italic),
+                (&mut colors.bold_italic, &inherited.colors.bold_italic),
+                (&mut colors.code, &inherited.colors.code),
+                (&mut colors.link, &inherited.colors.link),
+                (&mut colors.strikethrough, &inherited.colors.strikethrough),
+                (&mut colors.quote, &inherited.colors.quote),
+                (&mut config.markdown.h1.color, &inherited.h1.color),
+                (&mut config.markdown.h2.color, &inherited.h2.color),
+                (&mut config.markdown.h3.color, &inherited.h3.color),
+                (&mut config.markdown.h4.color, &inherited.h4.color),
+                (&mut config.markdown.h5.color, &inherited.h5.color),
+                (&mut config.markdown.h6.color, &inherited.h6.color),
+                (&mut config.markdown.divider.color, &inherited.divider.color),
+            ] {
+                if color.is_none() {
+                    color.clone_from(fallback);
+                }
+            }
+            config.theme = theme;
+            Ok(config)
+        };
+        parse().with_context(|| format!("Loading {}", path.display()))
+    }
+
+    /// Discover fresh colorschemes next to the config, even if it does not exist.
+    pub fn colorschemes(config_path: Option<&Path>) -> Result<Vec<Theme>> {
+        let mut themes: Vec<_> = ThemePreset::ALL
+            .iter()
+            .map(|preset| preset.theme())
+            .collect();
+        let Some(directory) = colorscheme_directory(config_path) else {
+            return Ok(themes);
+        };
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(themes),
+            Err(error) => {
+                return Err(error).with_context(|| format!("Reading {}", directory.display()));
+            }
+        };
+        let mut files = Vec::new();
+        for entry in entries {
+            let entry = entry.with_context(|| format!("Reading {}", directory.display()))?;
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) == Some("toml") {
+                let id = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .with_context(|| format!("Invalid colorscheme filename {}", path.display()))?
+                    .to_owned();
+                files.push((id, path));
+            }
         }
+        files.sort_by(|left, right| left.0.cmp(&right.0));
+        for (id, path) in files {
+            themes.push(ThemeFile::load(&path, &id)?);
+        }
+        Ok(themes)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -428,7 +755,7 @@ mod tests {
             assert_eq!(config.theme, preset.theme());
             assert_eq!(
                 config.theme.is_dark(),
-                !matches!(preset, ThemePreset::Paper | ThemePreset::SolarizedLight)
+                !matches!(preset, ThemePreset::Paper)
             );
         }
     }
@@ -436,15 +763,15 @@ mod tests {
     #[test]
     fn explicit_theme_colors_override_presets_in_either_order() {
         for fields in [
-            "preset = 'nord'\naccent = '#123456'",
-            "accent = '#123456'\npreset = 'nord'",
+            "preset = 'paper'\naccent = '#123456'",
+            "accent = '#123456'\npreset = 'paper'",
         ] {
             let config = Config::parse(Path::new("c.toml"), &format!("[theme]\n{fields}")).unwrap();
             assert_eq!(
                 config.theme,
                 Theme {
                     accent: "#123456".into(),
-                    ..ThemePreset::Nord.theme()
+                    ..ThemePreset::Paper.theme()
                 }
             );
         }
@@ -490,10 +817,10 @@ mod tests {
     #[test]
     fn syntax_brightness_follows_background_overrides_not_preset() {
         for (preset, background, dark) in [
-            ("nord", "#ffffff", false),
+            ("rockdown", "#ffffff", false),
             ("paper", "#000000", true),
-            ("dracula", "#00ff00", false),
-            ("solarized-light", "#0000ff", true),
+            ("rockdown", "#00ff00", false),
+            ("paper", "#0000ff", true),
         ] {
             let config = Config::parse(
                 Path::new("c.toml"),
@@ -501,6 +828,310 @@ mod tests {
             )
             .unwrap();
             assert_eq!(config.theme.is_dark(), dark);
+        }
+    }
+
+    #[test]
+    fn colorscheme_discovery_is_sorted_and_reloads_from_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let config_path = root.path().join("config.toml");
+        let ids = |themes: Vec<Theme>| {
+            themes
+                .into_iter()
+                .map(|theme| theme.preset)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(Config::colorschemes(Some(&config_path)).unwrap()),
+            ["rockdown", "paper"]
+        );
+        let directory = root.path().join("colorscheme");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("zeta.toml"), "name = 'First label'").unwrap();
+        std::fs::write(
+            directory.join("alpha.toml"),
+            "name = 'Last label'\nbase = 'paper'",
+        )
+        .unwrap();
+        std::fs::write(directory.join("ignored.txt"), "not toml").unwrap();
+        let themes = Config::colorschemes(Some(&config_path)).unwrap();
+        assert_eq!(themes[2].name, "Last label");
+        assert_eq!(themes[2].background, ThemePreset::Paper.theme().background);
+        assert_eq!(ids(themes), ["rockdown", "paper", "alpha", "zeta"]);
+
+        std::fs::write(&config_path, "[theme]\npreset = 'alpha'").unwrap();
+        let first = Config::load(Some(&config_path)).unwrap().0;
+        std::fs::write(
+            directory.join("alpha.toml"),
+            "name = 'Updated'\n[theme]\naccent = '#112233'",
+        )
+        .unwrap();
+        let second = Config::load(Some(&config_path)).unwrap().0;
+        assert_ne!(first.theme.accent, second.theme.accent);
+        assert_eq!(second.theme.name, "Updated");
+        assert_eq!(second.theme.accent, "#112233");
+        assert_eq!(
+            Config::colorschemes(Some(&config_path)).unwrap()[2],
+            second.theme
+        );
+        std::fs::remove_file(directory.join("alpha.toml")).unwrap();
+        assert_eq!(
+            ids(Config::colorschemes(Some(&config_path)).unwrap()),
+            ["rockdown", "paper", "zeta"]
+        );
+        let error = Config::load(Some(&config_path)).unwrap_err();
+        assert!(format!("{error:#}").contains("alpha.toml"));
+    }
+
+    #[test]
+    fn custom_colors_merge_with_explicit_config_and_adapt_inherited_palettes() {
+        let root = tempfile::tempdir().unwrap();
+        let config_path = root.path().join("config.toml");
+        let directory = root.path().join("colorscheme");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(
+            directory.join("custom.toml"),
+            r##"
+name = "Custom display name"
+base = "paper"
+[theme]
+background = "#000000"
+accent = "#123456"
+[syntax]
+keyword = "#654321"
+[markdown.colors]
+normal = "#101010"
+bold = "#202020"
+italic = "#303030"
+bold_italic = "#404040"
+code = "#505050"
+link = "#606060"
+strikethrough = "#707070"
+quote = "#808080"
+[markdown.h1]
+color = "#909090"
+[markdown.h2]
+color = "#a0a0a0"
+[markdown.divider]
+color = "#b0b0b0"
+"##,
+        )
+        .unwrap();
+        let config = Config::parse(
+            &config_path,
+            r##"
+[theme]
+preset = "custom"
+background = "#ffffff"
+accent = "#356d61"
+[markdown.colors]
+normal = "#abcdef"
+[markdown.h1]
+font_size = 42
+underline = true
+[markdown.h2]
+color = "#fedcba"
+[markdown.divider]
+thickness = 3
+"##,
+        )
+        .unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.theme.preset, "custom");
+        assert_eq!(config.theme.name, "Custom display name");
+        assert_eq!(config.theme.accent, "#356d61");
+        assert_eq!(config.markdown.colors.normal.as_deref(), Some("#abcdef"));
+        assert_eq!(config.markdown.colors.bold.as_deref(), Some("#202020"));
+        assert_eq!(config.markdown.colors.italic.as_deref(), Some("#303030"));
+        assert_eq!(
+            config.markdown.colors.bold_italic.as_deref(),
+            Some("#404040")
+        );
+        assert_eq!(config.markdown.colors.code.as_deref(), Some("#505050"));
+        assert_eq!(config.markdown.colors.link.as_deref(), Some("#606060"));
+        assert_eq!(
+            config.markdown.colors.strikethrough.as_deref(),
+            Some("#707070")
+        );
+        assert_eq!(config.markdown.colors.quote.as_deref(), Some("#808080"));
+        assert_eq!(config.markdown.h1.color.as_deref(), Some("#909090"));
+        assert_eq!(config.markdown.h1.font_size, Some(42.));
+        assert!(config.markdown.h1.underline);
+        assert_eq!(config.markdown.h2.color.as_deref(), Some("#fedcba"));
+        assert_eq!(config.markdown.divider.color.as_deref(), Some("#b0b0b0"));
+        assert_eq!(config.markdown.divider.thickness, 3.);
+        let mut expected = ThemePreset::Paper.theme().syntax_palette();
+        expected[8] = 0x654321;
+        assert_eq!(config.theme.syntax_palette(), expected);
+        assert_eq!(
+            config.theme.ansi_palette(),
+            ThemePreset::Paper.theme().ansi_palette()
+        );
+        let raw = Config::colorschemes(Some(&config_path))
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(raw.syntax_palette()[8], 0x654321);
+        assert_ne!(raw.syntax_palette()[0], config.theme.syntax_palette()[0]);
+        assert_ne!(raw.ansi_palette(), config.theme.ansi_palette());
+
+        let mut markdown = config.markdown.clone();
+        raw.apply_markdown_colors(&mut markdown);
+        assert_eq!(markdown.colors.normal.as_deref(), Some("#101010"));
+        assert_eq!(markdown.h2.color.as_deref(), Some("#a0a0a0"));
+        ThemePreset::Rockdown
+            .theme()
+            .apply_markdown_colors(&mut markdown);
+        assert_eq!(markdown.colors, MarkdownColors::default());
+        assert!(markdown.h1.color.is_none());
+        assert!(markdown.h2.color.is_none());
+        assert!(markdown.divider.color.is_none());
+        assert_eq!(markdown.h1.font_size, Some(42.));
+        assert!(markdown.h1.underline);
+        assert_eq!(markdown.divider.thickness, 3.);
+    }
+
+    #[test]
+    fn explicit_syntax_and_terminal_palettes_keep_role_order_and_values() {
+        let root = tempfile::tempdir().unwrap();
+        let config_path = root.path().join("config.toml");
+        let directory = root.path().join("colorscheme");
+        std::fs::create_dir(&directory).unwrap();
+        let ansi = (0..16)
+            .map(|value| format!("'#{value:06x}'"))
+            .collect::<Vec<_>>()
+            .join(",");
+        std::fs::write(
+            directory.join("custom.toml"),
+            format!(
+                r##"
+[syntax]
+foreground = "#000010"
+comment = "#000011"
+variable = "#000012"
+constant = "#000013"
+type = "#000014"
+string = "#000015"
+escape = "#000016"
+function = "#000017"
+keyword = "#000018"
+embedded = "#000019"
+[terminal]
+ansi = [{ansi}]
+"##
+            ),
+        )
+        .unwrap();
+        for background in ["#ffffff", "#000000"] {
+            let config = Config::parse(
+                &config_path,
+                &format!("[theme]\npreset = 'custom'\nbackground = '{background}'"),
+            )
+            .unwrap();
+            assert_eq!(
+                config.theme.syntax_palette(),
+                std::array::from_fn(|index| 0x10 + index as u32)
+            );
+            assert_eq!(
+                config.theme.ansi_palette(),
+                std::array::from_fn(|index| index as u32)
+            );
+        }
+    }
+
+    #[test]
+    fn colorscheme_errors_identify_files_and_reject_invalid_schema() {
+        let root = tempfile::tempdir().unwrap();
+        let config_path = root.path().join("config.toml");
+        let directory = root.path().join("colorscheme");
+        std::fs::create_dir(&directory).unwrap();
+        let selected = "[theme]\npreset = 'custom'";
+        let file = directory.join("custom.toml");
+        assert!(
+            format!("{:#}", Config::parse(&config_path, selected).unwrap_err())
+                .contains("custom.toml")
+        );
+        for contents in [
+            "not valid toml",
+            "unknown = true",
+            "base = 'nord'",
+            "theme.preset = 'paper'",
+            "theme.accnet = '#123456'",
+            "theme.background = '#bad'",
+            "syntax.keywrod = '#123456'",
+            "syntax.keyword = 'red'",
+            "terminal.unknown = []",
+            "terminal.ansi = ['#123456']",
+            "markdown.unknown = true",
+            "markdown.colors.bould = '#123456'",
+            "markdown.colors.link = 'red'",
+            "markdown.h1.font_size = 40",
+            "markdown.h2.underline = true",
+            "markdown.h3.color = 'red'",
+            "markdown.divider.thickness = 2",
+            "markdown.divider.color = 'red'",
+        ] {
+            std::fs::write(&file, contents).unwrap();
+            let error = Config::parse(&config_path, selected).unwrap_err();
+            let message = format!("{error:#}");
+            assert!(
+                message.contains(&config_path.display().to_string()),
+                "{message}"
+            );
+            assert!(message.contains(&file.display().to_string()), "{message}");
+            let error = Config::colorschemes(Some(&config_path)).unwrap_err();
+            assert!(format!("{error:#}").contains(&file.display().to_string()));
+        }
+        for count in [15, 17] {
+            let colors = vec!["'#123456'"; count].join(",");
+            std::fs::write(&file, format!("[terminal]\nansi = [{colors}]")).unwrap();
+            assert!(Config::colorschemes(Some(&config_path)).is_err());
+        }
+        let mut colors = vec!["'#123456'"; 16];
+        colors[7] = "'invalid'";
+        std::fs::write(&file, format!("[terminal]\nansi = [{}]", colors.join(","))).unwrap();
+        assert!(Config::colorschemes(Some(&config_path)).is_err());
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_dir(&directory).unwrap();
+        std::fs::write(&directory, "not a directory").unwrap();
+        let error = Config::colorschemes(Some(&config_path)).unwrap_err();
+        assert!(format!("{error:#}").contains(&directory.display().to_string()));
+    }
+
+    #[test]
+    fn colorscheme_ids_cannot_traverse_directories_or_replace_builtins() {
+        let root = tempfile::tempdir().unwrap();
+        let config_path = root.path().join("config.toml");
+        let directory = root.path().join("colorscheme");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(root.path().join("outside.toml"), "").unwrap();
+        for id in [
+            "",
+            ".",
+            "..",
+            "../outside",
+            "nested/other",
+            r"nested\other",
+            "/absolute",
+            "C:drive",
+        ] {
+            let error =
+                Config::parse(&config_path, &format!("[theme]\npreset = '{id}'")).unwrap_err();
+            assert!(format!("{error:#}").contains("Invalid colorscheme ID"));
+        }
+        for preset in ThemePreset::ALL {
+            let file = directory.join(format!("{}.toml", preset.id()));
+            std::fs::write(&file, "name = 'Impostor'").unwrap();
+            let error = Config::colorschemes(Some(&config_path)).unwrap_err();
+            assert!(format!("{error:#}").contains("reserved"));
+            assert!(format!("{error:#}").contains(&file.display().to_string()));
+            let config = Config::parse(
+                &config_path,
+                &format!("[theme]\npreset = '{}'", preset.id()),
+            )
+            .unwrap();
+            assert_eq!(config.theme, preset.theme());
+            std::fs::remove_file(file).unwrap();
         }
     }
 

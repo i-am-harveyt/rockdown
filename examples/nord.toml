@@ -1,0 +1,64 @@
+# Copy to ~/.config/rockdown/colorscheme/nord.toml (Unix), or
+# %APPDATA%\rockdown\colorscheme\nord.toml (Windows).
+# With --config PATH, use the colorscheme/ directory beside that config file.
+# Select with [theme] preset = "nord" in config.toml, or in the Theme picker.
+# The filename (without .toml) is the preset ID; name is the picker label.
+name = "Nord"
+# Only built-in bases are allowed. Omitted fields inherit this base.
+base = "rockdown"
+
+[theme]
+background = "#2e3440"
+panel = "#3b4252"
+foreground = "#eceff4"
+muted = "#a3b1c6"
+accent = "#88c0d0"
+
+# Syntax roles used by fenced-code highlighting.
+[syntax]
+foreground = "#eceff4"
+comment = "#a3b1c6"
+variable = "#bf616a"
+constant = "#d08770"
+type = "#ebcb8b"
+string = "#a3be8c"
+escape = "#8fbcbb"
+function = "#88c0d0"
+keyword = "#b48ead"
+embedded = "#81a1c1"
+
+[terminal]
+# ANSI 0–7: black, red, green, yellow, blue, magenta, cyan, white.
+# ANSI 8–15: their bright counterparts. Exactly 16 colors are required.
+ansi = [
+  "#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
+  "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0",
+  "#4c566a", "#d57780", "#b1d196", "#f0d399",
+  "#8fbcdb", "#c59cbe", "#8fbcbb", "#eceff4",
+]
+
+# Colors only: typography stays in config.toml.
+[markdown.colors]
+normal = "#eceff4"
+bold = "#ebcb8b"
+italic = "#b48ead"
+bold_italic = "#d08770"
+code = "#a3be8c"
+link = "#88c0d0"
+strikethrough = "#a3b1c6"
+quote = "#a3b1c6"
+
+[markdown.h1]
+color = "#88c0d0"
+[markdown.h2]
+color = "#88c0d0"
+[markdown.h3]
+color = "#88c0d0"
+[markdown.h4]
+color = "#88c0d0"
+[markdown.h5]
+color = "#88c0d0"
+[markdown.h6]
+color = "#88c0d0"
+[markdown.divider]
+color = "#a3b1c6"
