@@ -262,7 +262,12 @@ impl Workspace {
                 *top -= 1;
                 *offset += self.row_heights[index][*top];
             }
-            *offset = offset.clamp(0., (self.row_heights[index][*top] - 1.).max(0.));
+            let minimum = if pane == Pane::Editor && *top == 0 {
+                -(self.pane_heights[index] - self.config.line_height).max(0.) / 2.
+            } else {
+                0.
+            };
+            *offset = offset.clamp(minimum, (self.row_heights[index][*top] - 1.).max(0.));
             self.follow_cursor = false;
             cx.notify();
         }
@@ -270,6 +275,13 @@ impl Workspace {
     pub fn ensure_cursor_visible(&mut self, pane: Pane, height: f32) {
         if pane == Pane::Terminal {
             return;
+        }
+        if pane == Pane::Editor
+            && self.pane_heights[pane.index()] == 0.
+            && self.tops[pane.index()] == 0
+            && self.scroll_offsets[pane.index()] == 0.
+        {
+            self.scroll_offsets[pane.index()] = -(height - self.config.line_height).max(0.) / 2.;
         }
         self.pane_heights[pane.index()] = height;
         let rows = (height / self.config.line_height).max(1.) as usize;
@@ -280,6 +292,14 @@ impl Workspace {
         };
         self.row_heights[pane.index()].resize(count, self.config.line_height);
         self.tops[pane.index()] = self.tops[pane.index()].min(count - 1);
+        // Negative offsets expose the space above the document, never above
+        // an interior row. Re-clamp it when the viewport is resized.
+        let minimum = if pane == Pane::Editor && self.tops[pane.index()] == 0 {
+            -(height - self.config.line_height).max(0.) / 2.
+        } else {
+            0.
+        };
+        self.scroll_offsets[pane.index()] = self.scroll_offsets[pane.index()].max(minimum);
         if let Some((target, center)) = self.viewport_alignment
             && target == pane
         {
@@ -295,7 +315,11 @@ impl Workspace {
                 space -= self.row_heights[index][top];
             }
             self.tops[index] = top;
-            self.scroll_offsets[index] = (-space).max(0.);
+            self.scroll_offsets[index] = if pane == Pane::Editor {
+                -space
+            } else {
+                (-space).max(0.)
+            };
             return;
         }
         if self.follow_cursor && pane == self.pane && pane != Pane::Terminal {

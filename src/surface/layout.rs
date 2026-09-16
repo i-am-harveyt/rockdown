@@ -455,7 +455,7 @@ impl Surface {
                 if delta.abs() > px(0.5) {
                     self.workspace.update(cx, |app, _| {
                         let offset = &mut app.scroll_offsets[self.pane.index()];
-                        *offset = (*offset + f32::from(delta)).max(0.);
+                        *offset += f32::from(delta);
                     });
                     continue;
                 }
