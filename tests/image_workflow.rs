@@ -79,7 +79,7 @@ fn text(window: &mut VisualTestContext, view: &Entity<Workspace>) -> String {
 }
 
 fn assets(base: &Path, source: &str) -> Vec<PathBuf> {
-    markdown::project(source, true)
+    markdown::project(source, &Config::default().theme)
         .iter()
         .flat_map(|line| &line.images)
         .map(|image| {

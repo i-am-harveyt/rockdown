@@ -90,8 +90,10 @@ impl Pane {
 
 struct ThemePicker {
     original: Theme,
+    original_markdown: crate::config::MarkdownStyle,
     presets: Vec<Theme>,
     selected: usize,
+    scroll: ScrollHandle,
 }
 
 struct OutlinePicker {
@@ -156,7 +158,7 @@ impl Workspace {
         focus.focus(window);
         bind_config_keys(&config, cx);
         let projection = if document.is_markdown() {
-            markdown::project(&document.buffer.text(), config.theme.is_dark())
+            markdown::project(&document.buffer.text(), &config.theme)
         } else {
             Vec::new()
         };
@@ -232,7 +234,7 @@ impl Workspace {
         let document = self.documents.current();
         if document.is_markdown() {
             let source = document.buffer.text();
-            self.projection = markdown::project(&source, self.config.theme.is_dark());
+            self.projection = markdown::project(&source, &self.config.theme);
             self.headings = outline::headings(&source);
         } else {
             self.projection.clear();

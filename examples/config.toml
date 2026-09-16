@@ -17,7 +17,8 @@ terminal_height = 240
 # shell = 'C:\Program Files\PowerShell\7\pwsh.exe'
 
 [theme]
-# rockdown, nord, dracula, gruvbox, paper, solarized-light
+# Built-ins: rockdown, paper. Other IDs load colorscheme/<id>.toml beside this file.
+# For Nord, copy examples/nord.toml into colorscheme/nord.toml and select "nord".
 preset = "rockdown"
 # Optional overrides take precedence over the preset:
 # background = "#171b22"
@@ -26,23 +27,24 @@ preset = "rockdown"
 # muted = "#8995a7"
 # accent = "#9cc7b5"
 
-# Optional Markdown overrides; omitted fields retain their defaults.
-# normal inherits theme.foreground; code/link inherit theme.accent.
-# Other omitted colors inherit normal (or the applicable heading/quote color).
+# Optional Markdown overrides; leave colors commented to follow the preset.
+# normal inherits theme.foreground; headings/code/link inherit theme.accent.
+# quote/strikethrough/divider inherit theme.muted; emphasis inherits its text color.
+# The picker replaces color overrides for the session, but preserves typography.
 [markdown.colors]
-bold = "#f2cf8f"
-italic = "#bac7ed"
-bold_italic = "#edb8d6"
-code = "#a8d4bc"
-link = "#8fc8ed"
-strikethrough = "#8995a7"
-quote = "#a8b4c7"
+# bold = "#f2cf8f"
+# italic = "#bac7ed"
+# bold_italic = "#edb8d6"
+# code = "#a8d4bc"
+# link = "#8fc8ed"
+# strikethrough = "#8995a7"
+# quote = "#a8b4c7"
 
 # Every level accepts font_size, color, and underline independently.
 # Unset sizes use built-in heading scaling; larger sizes expand rows.
 [markdown.h1]
 font_size = 32
-color = "#c2dded"
+# color = "#c2dded"
 underline = true
 
 [markdown.h2]
@@ -62,9 +64,9 @@ font_size = 18
 font_size = 16
 
 # Horizontal rules and heading underlines share these settings.
-# Omitted color inherits normal; thickness defaults to 1.
+# Omitted color inherits theme.muted; thickness defaults to 1.
 [markdown.divider]
-color = "#566575"
+# color = "#566575"
 thickness = 1.5
 
 # Specifying keys replaces the default shortcut map.

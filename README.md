@@ -396,20 +396,25 @@ Rockdown loads configuration in this order:
 
 An invalid selected config produces an error on startup or reload. Project-local config is not loaded automatically.
 
-### Built-in colorschemes and live preview
+### Colorscheme files and live preview
 
 Click **Theme** in the footer, press **Ctrl/Cmd-Shift-T**, or run `:theme`.
 Hover a palette or use **↑/↓**, **j/k**, or **Tab** to preview it immediately.
 Click or press **Enter** to keep it; **Esc** or clicking outside cancels and restores
 the exact previous palette. **Current theme** preserves your custom colors.
 
-Available presets: **Rockdown**, **Nord**, **Dracula**, **Gruvbox** (dark),
-**Paper**, and **Solarized Light**. The picker updates workspace colors and
-dark/light fenced-code syntax colors without changing document contents.
-Explicit `markdown` color and typography overrides remain in effect.
+The built-in themes are **Rockdown** (dark) and **Paper** (light). Additional
+themes are loaded from `colorscheme/*.toml` inside your configuration directory.
+The picker updates workspace and Markdown
+colors, preset-specific fenced-code syntax highlighting, and the terminal's
+16 ANSI colors without changing document contents. Choosing a preset replaces
+session Markdown color overrides, including heading and divider colors, while
+preserving font sizes, heading underlines, and divider thickness. **Current
+theme** or canceling restores the previous custom colors.
 
 Picker choices last for the current session and never rewrite your config.
-For a startup preference, add a preset to your existing `[theme]` table:
+For a startup preference, add a preset to your existing `[theme]` table
+(install the Nord example below before selecting `nord`):
 
 ```toml
 [theme]
@@ -417,10 +422,46 @@ preset = "nord"
 # accent = "#a3be8c" # Optional override.
 ```
 
-Preset IDs are `rockdown`, `nord`, `dracula`, `gruvbox`, `paper`, and
-`solarized-light`. Explicit color fields override the preset, so remove old color
-overrides if you want the complete preset. `:config` restores your configured
-palette. The configurable shortcut action is `themes`.
+Built-in IDs are `rockdown` and `paper`; custom IDs are filenames without `.toml`.
+At startup, explicit `[theme]` and Markdown color fields
+override the preset, so remove old color overrides if you want the complete
+preset. `:config` restores your configured palette and Markdown overrides.
+The configurable shortcut action is `themes`. Explicit terminal RGB colors
+and extended xterm colors (indexes 16–255) remain controlled by terminal programs.
+
+#### Installing or creating a colorscheme
+
+Copy [`examples/nord.toml`](examples/nord.toml) to:
+
+- Unix: `~/.config/rockdown/colorscheme/nord.toml`
+- Windows: `%APPDATA%\rockdown\colorscheme\nord.toml`
+- With `XDG_CONFIG_HOME`: `$XDG_CONFIG_HOME/rockdown/colorscheme/nord.toml`
+- With `--config PATH`: `colorscheme/nord.toml` beside that configuration file.
+
+Reopen the Theme picker to discover new or edited files. `:config` reloads the
+startup selection and its colorscheme file. A missing `colorscheme/` directory
+is fine: only the two built-in themes appear. Custom files are sorted by ID
+after the built-ins. Invalid files report their path instead of silently
+falling back; `rockdown` and `paper` are reserved IDs.
+
+Each file accepts these optional settings; unspecified colors inherit `base`
+(`rockdown` by default, or `paper`). Custom themes cannot inherit another file.
+
+| Section | Fields |
+| --- | --- |
+| Top level | `name`: picker label (defaults to filename); `base`: `rockdown` or `paper`. |
+| `[theme]` | `background`, `panel`, `foreground`, `muted`, `accent`. |
+| `[syntax]` | `foreground`, `comment`, `variable`, `constant`, `type`, `string`, `escape`, `function`, `keyword`, `embedded`. |
+| `[terminal]` | `ansi`: exactly 16 RGB colors, standard ANSI 0–15 order. |
+| `[markdown.colors]` | `normal`, `bold`, `italic`, `bold_italic`, `code`, `link`, `strikethrough`, `quote`. |
+| `[markdown.h1]` through `[markdown.h6]` | `color`. |
+| `[markdown.divider]` | `color`. |
+
+Colors are six-digit RGB strings, with or without `#`. Unknown fields and invalid
+colors are rejected. Keep typography (font sizes, underlines, divider thickness)
+in `config.toml`; colorscheme files contain colors only. Explicit syntax/ANSI
+colors stay as authored; inherited syntax/ANSI colors adapt to the background's
+brightness.
 
 ### TOML example
 
@@ -434,11 +475,9 @@ image_assets_dir = "assets"
 shell = "/bin/zsh"
 
 [theme]
-background = "#171b22"
-panel = "#1e242e"
-foreground = "#dce3ec"
-muted = "#8995a7"
-accent = "#9cc7b5"
+preset = "rockdown"
+# Optional override:
+# accent = "#9cc7b5"
 ```
 
 A complete example, including the default shortcut map, is provided in [`examples/config.toml`](examples/config.toml).
@@ -454,7 +493,7 @@ A complete example, including the default shortcut map, is provided in [`example
 | `explorer_width` | `290` | Configured range: 180–600; display width also respects window size. |
 | `terminal_height` | `240` | Range: 100–600. |
 | `shell` | Windows: `%COMSPEC%`, then `cmd.exe`; Unix: `$SHELL`, then `/bin/sh` | Shell executable, not a command string with arguments. |
-| `theme` | Rockdown | `preset` selects a built-in palette; optional six-digit RGB colors override individual fields. |
+| `theme` | Rockdown | `preset` selects `rockdown`, `paper`, or a colorscheme filename; optional six-digit RGB colors override individual fields. |
 | `markdown` | Inherited colors and built-in heading sizes | Nested appearance settings described below. |
 | `keys` | Built-in shortcuts | Maps GPUI keystrokes to action names. |
 
@@ -470,13 +509,15 @@ The optional `markdown` table customizes appearance. Existing configs need no ch
 | `markdown.h1` through `markdown.h6` | `font_size`, `color`, `underline` | Each level is independent. Optional `font_size`: 10–128; optional RGB `color`; `underline`: `false`. |
 | `markdown.divider` | `color`, `thickness` | Optional RGB `color`; `thickness`: `1`, range 0.5–12. |
 
-`normal` inherits `theme.foreground` when omitted. It sets the editor's base text color, including the active line's raw source and plain-text documents; explorer text continues to use the theme. `code` and `link` default to `theme.accent`. Other unset colors inherit the applicable heading or quote color, then `normal`. Heading and quote colors themselves inherit `normal`; divider color inherits `theme.muted`.
+`normal` inherits `theme.foreground` when omitted. It sets the editor's base text color, including the active line's raw source and plain-text documents; explorer text continues to use the theme. Headings, `code`, and `link` default to `theme.accent`. Quotes, strikethrough text, and dividers default to `theme.muted`. Unset emphasis colors inherit the applicable heading or quote color, then `normal`.
 
 Color precedence, highest first, is **syntax highlighting → code → link → bold-italic → bold → italic → strikethrough → heading/quote → normal**. A missing optional override leaves the inherited color in place rather than masking a lower-priority color.
 
 All six heading levels can override their size, color, and underline separately. An omitted heading size uses the built-in scaling relative to `font_size`. Larger heading sizes automatically expand rows so content is not clipped; you do not need to increase `line_height` to fit them. `underline = true` draws a full-width line below that heading's content. Heading underlines and horizontal rules share `markdown.divider.color` and `markdown.divider.thickness`.
 
-For example, these TOML settings enlarge and underline first-level headings while leaving other sizes and colors inherited:
+For example, these TOML settings enlarge and underline first-level headings and
+set fixed bold, link, and divider colors. Omit the colors to follow the preset;
+selecting a built-in preset in the picker replaces them for that session only.
 
 ```toml
 [markdown.colors]

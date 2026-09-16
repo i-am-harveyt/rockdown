@@ -6,22 +6,35 @@ use std::{
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use syntect::{
     easy::HighlightLines,
-    highlighting::{FontStyle as SyntaxFontStyle, ThemeSet},
+    highlighting::{Color, FontStyle as SyntaxFontStyle, Theme as SyntaxTheme, ThemeSet},
     parsing::SyntaxSet,
 };
 
-// Compiled syntax engine shared by every refresh: the grammar set and the
-// themes used for fenced code blocks.
-static HIGHLIGHTER: LazyLock<(SyntaxSet, ThemeSet)> = LazyLock::new(|| {
-    (
-        SyntaxSet::load_defaults_newlines(),
-        ThemeSet::load_defaults(),
-    )
+use crate::config::Theme;
+
+// Share syntect's language rules and base styles across projections. Map Ocean
+// foreground roles to the active palette only when emitting a highlighted span.
+static HIGHLIGHTER: LazyLock<(SyntaxSet, SyntaxTheme)> = LazyLock::new(|| {
+    let mut themes = ThemeSet::load_defaults();
+    let base = themes.themes.remove("base16-ocean.dark").unwrap();
+    (SyntaxSet::load_defaults_newlines(), base)
 });
 
-/// Render one syntect color as the hex form the renderer's style table parses.
-fn foreground_hex(color: syntect::highlighting::Color) -> String {
-    format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
+fn syntax_color(color: Color, palette: &[u32; 10]) -> u32 {
+    let rgb = (u32::from(color.r) << 16) | (u32::from(color.g) << 8) | u32::from(color.b);
+    let index = match rgb {
+        0x65737e => 1, // comments
+        0xbf616a => 2, // variables, tags
+        0xd08770 => 3, // constants, numbers
+        0xebcb8b => 4, // types
+        0xa3be8c => 5, // strings
+        0x96b5b4 => 6, // regular expressions, escapes
+        0x8fa1b3 => 7, // functions
+        0xb48ead => 8, // keywords
+        0xab7967 => 9, // embedded markup
+        _ => 0,        // neutral text
+    };
+    palette[index]
 }
 
 /// Append one code-block text chunk as syntax-highlighted spans. Pulldown
@@ -32,6 +45,7 @@ fn append_highlighted(
     row: usize,
     text: &str,
     highlighter: &mut HighlightLines,
+    palette: &[u32; 10],
 ) {
     let (syntaxes, _) = &*HIGHLIGHTER;
     for (offset, part) in text.split_inclusive('\n').enumerate() {
@@ -56,7 +70,7 @@ fn append_highlighted(
                 code: true,
                 strike: false,
                 link: None,
-                color: Some(foreground_hex(style.foreground)),
+                color: Some(format!("#{:06x}", syntax_color(style.foreground, palette))),
             });
         }
     }
@@ -206,8 +220,8 @@ enum Container {
 /// Project a single full-document parse onto physical source lines. Delimiter-only
 /// and trailing empty lines deliberately remain present, so a click always refers
 /// to the same row in the editable buffer. Offsets are UTF-8 byte offsets.
-/// `dark` selects code foregrounds suited to the editor's background.
-pub fn project(source: &str, dark: bool) -> Vec<RenderedLine> {
+/// `theme` supplies syntax colors suited to the actual editor background.
+pub fn project(source: &str, theme: &Theme) -> Vec<RenderedLine> {
     let mut starts = vec![0];
     starts.extend(
         source
@@ -237,6 +251,7 @@ pub fn project(source: &str, dark: bool) -> Vec<RenderedLine> {
     let mut cell = None;
     let mut cell_index = 0usize;
     let mut code_highlighter: Option<HighlightLines<'static>> = None;
+    let palette = theme.syntax_palette();
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
 
@@ -285,17 +300,11 @@ pub fn project(source: &str, dark: bool) -> Vec<RenderedLine> {
                         CodeBlockKind::Fenced(info) => info.split_whitespace().next().unwrap_or(""),
                         CodeBlockKind::Indented => "",
                     };
-                    let (syntaxes, themes) = &*HIGHLIGHTER;
+                    let (syntaxes, base) = &*HIGHLIGHTER;
                     let syntax = syntaxes
                         .find_syntax_by_token(token)
                         .unwrap_or_else(|| syntaxes.find_syntax_plain_text());
-                    let theme_name = if dark {
-                        "base16-ocean.dark"
-                    } else {
-                        "base16-ocean.light"
-                    };
-                    code_highlighter =
-                        Some(HighlightLines::new(syntax, &themes.themes[theme_name]));
+                    code_highlighter = Some(HighlightLines::new(syntax, base));
                 }
                 Tag::List(first) => {
                     cover(&mut lists, &starts, &range);
@@ -387,7 +396,7 @@ pub fn project(source: &str, dark: bool) -> Vec<RenderedLine> {
             },
             Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
                 if let Some(highlighter) = code_highlighter.as_mut() {
-                    append_highlighted(&mut lines, row, &text, highlighter);
+                    append_highlighted(&mut lines, row, &text, highlighter, &palette);
                 } else {
                     append_text(&mut lines, row, &text, &style, cell);
                 }
@@ -631,6 +640,36 @@ fn append_multiline_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{Config, ThemePreset};
+
+    fn custom_theme() -> Theme {
+        let directory = tempfile::tempdir().unwrap();
+        let colorschemes = directory.path().join("colorscheme");
+        std::fs::create_dir(&colorschemes).unwrap();
+        std::fs::write(
+            colorschemes.join("custom.toml"),
+            r##"
+                [syntax]
+                foreground = "#123450"
+                comment = "#123451"
+                variable = "#123452"
+                constant = "#123453"
+                type = "#123454"
+                string = "#123455"
+                escape = "#123456"
+                function = "#123457"
+                keyword = "#123458"
+                embedded = "#123459"
+            "##,
+        )
+        .unwrap();
+        Config::parse(
+            &directory.path().join("config.toml"),
+            "[theme]\npreset = 'custom'",
+        )
+        .unwrap()
+        .theme
+    }
 
     fn text(line: &RenderedLine) -> String {
         line.spans.iter().map(|span| span.text.as_str()).collect()
@@ -647,7 +686,7 @@ mod tests {
     #[test]
     fn task_offsets_come_from_parser_and_ignore_code() {
         let text = "- [ ] 世界\n> - [X] done\n\n```md\n- [ ] code\n```\n\nplain [ ] text";
-        let projected = project(text, true);
+        let projected = project(text, &Theme::default());
         assert_eq!(projected[0].task_marker, Some(2));
         assert_eq!(projected[1].task_marker, Some(4));
         assert_eq!(projected[4].task_marker, None);
@@ -656,7 +695,7 @@ mod tests {
 
     #[test]
     fn multiline_styles_keep_unicode_and_physical_rows() {
-        let lines = project("**hé *世界*\nencore**\n\n", true);
+        let lines = project("**hé *世界*\nencore**\n\n", &Theme::default());
         assert_eq!(lines.len(), 4);
         assert_eq!(
             lines.iter().map(|line| line.source_row).collect::<Vec<_>>(),
@@ -678,7 +717,10 @@ mod tests {
 
     #[test]
     fn fenced_blocks_do_not_parse_markdown_or_shift_following_rows() {
-        let lines = project("```rust\n**literal**\n\n世界\n```\nafter\n", true);
+        let lines = project(
+            "```rust\n**literal**\n\n世界\n```\nafter\n",
+            &Theme::default(),
+        );
         assert_eq!(lines.len(), 7);
         assert!(lines[0].spans.is_empty());
         assert_eq!(text(&lines[1]), "**literal**");
@@ -696,7 +738,7 @@ mod tests {
     fn fenced_code_is_highlighted_with_colors_and_no_line_breaks() {
         let lines = project(
             "```rust\nfn main() {\n    let x = 1;\n}\n```\nprose\n",
-            true,
+            &Theme::default(),
         );
         // Fence lines stay empty; body rows carry highlighted spans.
         assert!(lines[0].spans.is_empty());
@@ -723,33 +765,132 @@ mod tests {
     }
 
     #[test]
-    fn syntax_palette_changes_foregrounds_without_changing_projection_semantics() {
-        let source = "```rust\nfn main() {\n    let greeting = \"hé 世界\";\n}\n```\n**prose** [link](target)\n";
-        let mut dark = project(source, true);
-        let mut light = project(source, false);
-
-        assert_eq!(text(&dark[1]), "fn main() {");
-        assert_eq!(text(&light[1]), "fn main() {");
-        assert!(
-            dark[1]
-                .spans
-                .iter()
-                .zip(&light[1].spans)
-                .any(|(dark, light)| dark.color != light.color),
-            "the same Rust fence must adapt its foregrounds to the background"
-        );
-
-        for line in dark.iter_mut().chain(&mut light) {
+    fn syntax_themes_change_colors_without_changing_source_or_mapping() {
+        let source = "```rust\nfn main() {\n    let greeting = \"hé 世界\";\n    // comment\n}\n```\n**prose** [link](target)\n";
+        let mut baseline = project(source, &Theme::default());
+        for line in &mut baseline {
             for span in &mut line.spans {
                 span.color = None;
             }
         }
-        assert_eq!(dark, light, "only syntax foregrounds may change");
+        let mut palettes = Vec::new();
+        for theme in ThemePreset::ALL
+            .iter()
+            .map(|preset| preset.theme())
+            .chain([custom_theme()])
+        {
+            let mut projection = project(source, &theme);
+            let colors: Vec<_> = projection
+                .iter()
+                .flat_map(|line| &line.spans)
+                .filter_map(|span| span.color.clone())
+                .collect();
+            assert!(
+                !palettes.contains(&colors),
+                "{} must not reuse another theme's syntax palette",
+                theme.preset
+            );
+            palettes.push(colors);
+            for (row, physical) in source.lines().enumerate().take(5).skip(1) {
+                assert_eq!(text(&projection[row]), physical);
+                for (column, _) in physical.char_indices() {
+                    assert_eq!(projection[row].source_column(column), column);
+                }
+            }
+            for line in &mut projection {
+                for span in &mut line.spans {
+                    span.color = None;
+                }
+            }
+            assert_eq!(
+                projection, baseline,
+                "{} changed more than colors",
+                theme.preset
+            );
+        }
+    }
+
+    #[test]
+    fn custom_syntax_colors_reach_highlighted_roles_on_either_background() {
+        let source = "```rust\nfn main() { let greeting = \"hé 世界\"; }\n// comment\n```\n```\nplain body\n```";
+        let mut theme = custom_theme();
+        for background in ["#171b22", "#faf9f6"] {
+            theme.background = background.into();
+            let lines = project(source, &theme);
+            for (fragment, expected) in [
+                ("fn", "#123458"),
+                ("main", "#123457"),
+                ("hé 世界", "#123455"),
+            ] {
+                let span = lines[1]
+                    .spans
+                    .iter()
+                    .find(|span| span.text.contains(fragment))
+                    .expect("syntax token");
+                assert_eq!(span.color.as_deref(), Some(expected), "{fragment}");
+            }
+            assert!(
+                lines[2]
+                    .spans
+                    .iter()
+                    .all(|span| span.color.as_deref() == Some("#123451"))
+            );
+            assert!(
+                lines[5]
+                    .spans
+                    .iter()
+                    .all(|span| span.color.as_deref() == Some("#123450"))
+            );
+        }
+    }
+
+    #[test]
+    fn syntax_uses_legible_light_ink_even_for_dark_presets_with_overrides() {
+        fn luminance(hex: &str) -> f64 {
+            let rgb = crate::config::parse_color(hex).unwrap();
+            let linear = |shift: u32| {
+                let channel = ((rgb >> shift) & 0xff) as f64 / 255.;
+                if channel <= 0.04045 {
+                    channel / 12.92
+                } else {
+                    ((channel + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(16) + 0.7152 * linear(8) + 0.0722 * linear(0)
+        }
+
+        let source =
+            "```rust\nfn main() { let value: i32 = 123; println!(\"hé 世界\"); }\n// comment\n```";
+        for &preset in ThemePreset::ALL {
+            let mut theme = preset.theme();
+            if theme.is_dark() {
+                theme.background = "#faf9f6".into();
+            }
+            let light = project(source, &theme);
+            let background = luminance(&theme.background);
+            let colors: Vec<_> = light
+                .iter()
+                .flat_map(|line| &line.spans)
+                .filter_map(|span| span.color.as_deref())
+                .collect();
+            assert!(colors.windows(2).any(|pair| pair[0] != pair[1]));
+            for color in colors {
+                let contrast = (background + 0.05) / (luminance(color) + 0.05);
+                assert!(
+                    contrast >= 4.5,
+                    "{preset:?}: {color} has contrast {contrast}"
+                );
+            }
+            // The same preset must also honor a dark background override.
+            theme.background = "#171b22".into();
+            let dark = project(source, &theme);
+            assert_ne!(light[1].spans, dark[1].spans, "{preset:?}");
+        }
     }
 
     #[test]
     fn unknown_fence_language_highlights_as_plain_text() {
-        let lines = project("```\nplain body\n```\n", true);
+        let lines = project("```\nplain body\n```\n", &Theme::default());
         assert_eq!(text(&lines[1]), "plain body");
         assert!(lines[1].spans.iter().all(|span| span.code));
         assert!(lines[1].spans.iter().all(|span| span.color.is_some()));
@@ -759,7 +900,7 @@ mod tests {
     fn image_titles_set_preview_width() {
         let lines = project(
             "![a](a.png)\n![b](b.png \"40%\")\n![c](c.png \"320px\")\n![d](d.png \"nope\")\n",
-            true,
+            &Theme::default(),
         );
         assert_eq!(lines[0].images[0].width, None);
         assert_eq!(lines[1].images[0].width, Some(ImageWidth::Fraction(0.4)));
@@ -770,7 +911,7 @@ mod tests {
 
     #[test]
     fn multiline_code_keeps_container_prefixes_out_of_content() {
-        let lines = project("> - before ` hé\n>   世界 ` after\n", true);
+        let lines = project("> - before ` hé\n>   世界 ` after\n", &Theme::default());
         assert_eq!(text(&lines[0]), "• before hé");
         assert_eq!(text(&lines[1]), "世界 after");
         assert!(
@@ -791,7 +932,7 @@ mod tests {
     fn tables_links_and_entities_keep_source_rows() {
         let lines = project(
             "| name | value |\n| --- | --- |\n| [**A**](https://a.test) | &amp; |\n\n![*alt*](image.png)\n",
-            true,
+            &Theme::default(),
         );
         let header = lines[0].table.as_ref().unwrap();
         assert_eq!(cell_texts(header), ["name", "value"]);
@@ -825,9 +966,9 @@ mod tests {
     fn table_cells_preserve_parser_escaping_alignment_and_inline_styles() {
         let lines = project(
             "| left | center | right | plain |\n\
-         | :--- | :---: | ---: | --- |\n\
-         | hé\\|世界 | `a\\|b` | &vert; &amp; | [*é*](https://a.test) ~~old~~ |\n",
-            true,
+                 | :--- | :---: | ---: | --- |\n\
+                 | hé\\|世界 | `a\\|b` | &vert; &amp; | [*é*](https://a.test) ~~old~~ |\n",
+            &Theme::default(),
         );
         let table = lines[2].table.as_ref().unwrap();
         assert_eq!(
@@ -855,7 +996,7 @@ mod tests {
     fn missing_table_cells_stay_on_their_enclosing_source_row() {
         let lines = project(
             "| a | b | c |\n| --- | --- | --- |\n| | x |\n| only |\n| 1 | 2 | 3 | ignored |\n\nprose",
-            true,
+            &Theme::default(),
         );
         assert_eq!(cell_texts(lines[2].table.as_ref().unwrap()), ["", "x", ""]);
         assert_eq!(
@@ -879,8 +1020,8 @@ mod tests {
     fn quoted_crlf_tables_and_neighboring_tables_keep_distinct_ranges() {
         let lines = project(
             "> | hé | value |\r\n> | :--- | ---: |\r\n> | 世界 | |\r\n\r\n\
-         | next | table |\r\n| --- | :---: |\r\n\r\nfollowing\r\n",
-            true,
+                 | next | table |\r\n| --- | :---: |\r\n\r\nfollowing\r\n",
+            &Theme::default(),
         );
         for line in &lines[..3] {
             let table = line.table.as_ref().unwrap();
@@ -905,7 +1046,7 @@ mod tests {
 
     #[test]
     fn header_only_table_at_eof_includes_its_delimiter() {
-        let lines = project("| heading |\n| --- |", true);
+        let lines = project("| heading |\n| --- |", &Theme::default());
         assert_eq!(lines.len(), 2);
         assert_eq!(cell_texts(lines[0].table.as_ref().unwrap()), ["heading"]);
         let separator = lines[1].table.as_ref().unwrap();
@@ -922,7 +1063,7 @@ mod mapping_tests {
     #[test]
     fn preview_offsets_skip_markup_and_keep_unicode_and_entities() {
         let source = "# **café** and [世界](target) &amp; `code`";
-        let lines = project(source, true);
+        let lines = project(source, &Theme::default());
         let rendered: String = lines[0]
             .spans
             .iter()
@@ -944,7 +1085,7 @@ mod mapping_tests {
     #[test]
     fn list_marker_and_multiline_text_map_to_physical_source_rows() {
         let source = "- **first**\n  second café\n\n> [link](url)";
-        let lines = project(source, true);
+        let lines = project(source, &Theme::default());
         for (row, word) in [(0, "first"), (1, "café"), (3, "link")] {
             let rendered: String = lines[row]
                 .spans

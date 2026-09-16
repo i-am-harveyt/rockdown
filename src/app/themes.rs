@@ -1,18 +1,25 @@
 use super::{ThemePicker, Workspace};
-use crate::config::ThemePreset;
+use crate::config::Config;
 use gpui::{prelude::*, *};
 
 impl Workspace {
     pub(super) fn open_theme_picker(&mut self, cx: &mut Context<Self>) {
+        let presets = match Config::colorschemes(self.config_path.as_deref()) {
+            Ok(presets) => presets,
+            Err(error) => {
+                self.message = format!("{error:#}");
+                cx.notify();
+                return;
+            }
+        };
         self.help = false;
         self.dismiss_outline();
         self.theme_picker = Some(ThemePicker {
             original: self.config.theme.clone(),
-            presets: ThemePreset::ALL
-                .iter()
-                .map(|preset| preset.theme())
-                .collect(),
+            original_markdown: self.config.markdown.clone(),
+            presets,
             selected: 0,
+            scroll: ScrollHandle::new(),
         });
         cx.notify();
     }
@@ -30,11 +37,14 @@ impl Workspace {
         } else {
             &picker.presets[selected - 1]
         };
-        let reproject = self.config.theme.is_dark() != theme.is_dark();
         self.config.theme = theme.clone();
-        if reproject {
-            self.refresh_projection();
+        self.config.markdown = picker.original_markdown.clone();
+        if selected != 0 {
+            self.config
+                .theme
+                .apply_markdown_colors(&mut self.config.markdown);
         }
+        self.refresh_projection();
         cx.notify();
     }
 
@@ -44,17 +54,12 @@ impl Workspace {
         };
         if keep {
             if picker.selected != 0 {
-                self.message = format!(
-                    "{} theme · this session only",
-                    self.config.theme.preset.name()
-                );
+                self.message = format!("{} theme · this session only", self.config.theme.name);
             }
         } else {
-            let reproject = self.config.theme.is_dark() != picker.original.is_dark();
             self.config.theme = picker.original;
-            if reproject {
-                self.refresh_projection();
-            }
+            self.config.markdown = picker.original_markdown;
+            self.refresh_projection();
         }
         cx.notify();
     }
@@ -118,6 +123,7 @@ impl Workspace {
                             .min_h_0()
                             .overflow_y_scroll()
                             .px_2()
+                            .track_scroll(&picker.scroll)
                             .pb_2()
                             .children(
                                 std::iter::once(&picker.original)
@@ -128,7 +134,7 @@ impl Workspace {
                                         let name = if index == 0 {
                                             "Current theme"
                                         } else {
-                                            theme.preset.name()
+                                            &theme.name
                                         };
                                         let description =
                                             if theme.is_dark() { "Dark" } else { "Light" };
@@ -166,9 +172,12 @@ impl Workspace {
                                             .child(
                                                 div()
                                                     .flex_1()
+                                                    .min_w_0()
+                                                    .overflow_hidden()
+                                                    .text_ellipsis()
                                                     .text_size(px(13.))
                                                     .text_color(foreground)
-                                                    .child(name),
+                                                    .child(name.to_owned()),
                                             )
                                             .child(
                                                 div()

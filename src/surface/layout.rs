@@ -113,8 +113,8 @@ impl Surface {
                 bold_italic: color(&markdown.colors.bold_italic),
                 code: color(&markdown.colors.code).unwrap_or(accent),
                 link: color(&markdown.colors.link).unwrap_or(accent),
-                strikethrough: color(&markdown.colors.strikethrough),
-                quote: color(&markdown.colors.quote),
+                strikethrough: Some(color(&markdown.colors.strikethrough).unwrap_or(muted)),
+                quote: Some(color(&markdown.colors.quote).unwrap_or(muted)),
             };
             let mut tables: HashMap<usize, TableLayout> = HashMap::new();
             let mut y = bounds.top() - px(app.scroll_offsets[self.pane.index()]);
@@ -174,7 +174,7 @@ impl Surface {
                             if heading.font_size.is_some() {
                                 text_line_height = line_height.max(font_size + 4.);
                             }
-                            base = color(&heading.color).unwrap_or(base);
+                            base = color(&heading.color).unwrap_or(accent);
                             heading_underline = heading.underline;
                         }
                         BlockKind::Quote => {
