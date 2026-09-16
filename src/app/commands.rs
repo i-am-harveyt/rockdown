@@ -10,12 +10,17 @@ impl Workspace {
     /// the status bar instead of dropping them.
     pub(super) fn run_action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(error) = self.action(action, window, cx) {
-            self.message = format!("{error:#}");
+            self.set_message(format!("{error:#}"));
             cx.notify();
         }
     }
     fn action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
-        if self.help && !matches!(action, "help" | "themes" | "outline") {
+        if self.help
+            && !matches!(
+                action,
+                "help" | "themes" | "outline" | "tab-bar" | "status-bar"
+            )
+        {
             return Ok(());
         }
         if self.theme_picker.is_some() {
@@ -65,6 +70,11 @@ impl Workspace {
             }
             "themes" => self.open_theme_picker(cx),
             "outline" => self.toggle_outline(cx),
+            "tab-bar" => self.config.tab_bar_visible = !self.config.tab_bar_visible,
+            "status-bar" => {
+                self.config.status_bar_visible = !self.config.status_bar_visible;
+                self.set_message(String::new());
+            }
             "previous-buffer" => self.change_document(
                 |documents| {
                     documents.previous();
@@ -117,7 +127,7 @@ impl Workspace {
                 return;
             }
         }
-        self.message = format!("Pattern not found: {query}");
+        self.set_message(format!("Pattern not found: {query}"));
     }
     pub(super) fn execute(
         &mut self,
@@ -137,7 +147,10 @@ impl Workspace {
             if self.pane == Pane::Editor {
                 self.refresh_projection();
             }
-            self.message = format!("{count} substitution{}", if count == 1 { "" } else { "s" });
+            self.set_message(format!(
+                "{count} substitution{}",
+                if count == 1 { "" } else { "s" }
+            ));
             return Ok(());
         }
         let command = command.trim_end();
@@ -212,6 +225,11 @@ impl Workspace {
             "help" => self.help = true,
             "theme" | "themes" => self.open_theme_picker(cx),
             "outline" => self.toggle_outline(cx),
+            "tabbar" => self.config.tab_bar_visible = !self.config.tab_bar_visible,
+            "statusbar" => {
+                self.config.status_bar_visible = !self.config.status_bar_visible;
+                self.set_message(String::new());
+            }
             "config" => {
                 let (config, path) = Config::load(self.config_path.as_deref())?;
                 bind_config_keys(&config, cx);
@@ -221,7 +239,7 @@ impl Workspace {
                 for heights in &mut self.row_heights {
                     heights.clear();
                 }
-                self.message = "Configuration reloaded; new shell setting applies to the next terminal session".into();
+                self.set_message("Configuration reloaded; new shell setting applies to the next terminal session".into());
             }
             "" => {}
             number if number.parse::<usize>().is_ok() => {

@@ -206,9 +206,10 @@ fn run() -> Result<()> {
                     workspace.refresh_projection();
                     workspace.initialize_recovery(recovery, recovery_error, cx);
                     if restored {
-                        workspace.message =
+                        workspace.set_message(
                             "Restored previous session · recovered edits remain unsaved until :w"
-                                .into();
+                                .into(),
+                        );
                     }
                     workspace
                 });

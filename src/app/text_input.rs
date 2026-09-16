@@ -24,7 +24,7 @@ impl Workspace {
                     terminal.send(text.as_bytes())
                 };
                 if let Err(error) = result {
-                    self.message = error.to_string();
+                    self.set_message(error.to_string());
                 }
             }
         } else {
@@ -96,7 +96,7 @@ impl Workspace {
             if let Some(terminal) = &mut self.terminal
                 && let Err(error) = terminal.send(text.as_bytes())
             {
-                self.message = error.to_string();
+                self.set_message(error.to_string());
             }
             return;
         }

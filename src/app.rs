@@ -40,6 +40,8 @@ actions!(
         HelpToggle,
         ThemesToggle,
         OutlineToggle,
+        TabBarToggle,
+        StatusBarToggle,
         PreviousBuffer,
         NextBuffer,
         BufferDelete
@@ -63,6 +65,8 @@ pub fn bind_config_keys(config: &Config, cx: &mut App) {
             "help" => Box::new(HelpToggle),
             "themes" => Box::new(ThemesToggle),
             "outline" => Box::new(OutlineToggle),
+            "tab-bar" => Box::new(TabBarToggle),
+            "status-bar" => Box::new(StatusBarToggle),
             "previous-buffer" => Box::new(PreviousBuffer),
             "next-buffer" => Box::new(NextBuffer),
             "buffer-delete" => Box::new(BufferDelete),
@@ -131,6 +135,8 @@ pub struct Workspace {
     pub projection: Vec<RenderedLine>,
     pub command: Option<String>,
     pub message: String,
+    message_expiry_pending: bool,
+    message_expiry_task: Option<Task<()>>,
     pub help: bool,
     help_section: usize,
     theme_picker: Option<ThemePicker>,
@@ -168,6 +174,14 @@ impl Workspace {
         } else {
             Vec::new()
         };
+        let message: String = if !config.status_bar_visible {
+            ""
+        } else if cfg!(target_os = "macos") {
+            "i to write  ·  Cmd-S save  ·  F1 help"
+        } else {
+            "i to write  ·  Ctrl-S save  ·  F1 help"
+        }
+        .into();
         Self {
             config,
             config_path,
@@ -192,12 +206,9 @@ impl Workspace {
             row_heights: Default::default(),
             projection,
             command: None,
-            message: if cfg!(target_os = "macos") {
-                "i to write  ·  Cmd-S save  ·  F1 help"
-            } else {
-                "i to write  ·  Ctrl-S save  ·  F1 help"
-            }
-            .into(),
+            message_expiry_pending: !message.is_empty(),
+            message,
+            message_expiry_task: None,
             help: false,
             help_section: 0,
             theme_picker: None,
@@ -211,6 +222,14 @@ impl Workspace {
             pane_heights: [0.; 3],
             viewport_alignment: None,
         }
+    }
+
+    /// Replace the notification, cancelling any expiry belonging to the old one.
+    /// Its five-second lifetime begins when the workspace next renders.
+    pub fn set_message(&mut self, message: String) {
+        self.message_expiry_task = None;
+        self.message_expiry_pending = !message.is_empty();
+        self.message = message;
     }
 
     pub fn color(&self, value: &str) -> Hsla {

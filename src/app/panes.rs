@@ -85,15 +85,17 @@ impl Workspace {
                             let Some(terminal) = &mut this.terminal else {
                                 return false;
                             };
-                            if terminal.poll() {
-                                if let Some(error) = terminal.error() {
-                                    this.message = error.to_string();
+                            let changed = terminal.poll();
+                            let exited = terminal.exited();
+                            if changed {
+                                if let Some(error) = terminal.error().map(str::to_owned) {
+                                    this.set_message(error);
                                 }
                                 if this.terminal_visible {
                                     cx.notify();
                                 }
                             }
-                            if terminal.exited() {
+                            if exited {
                                 this.terminal_visible = false;
                                 this.terminal = None;
                                 if this.pane == Pane::Terminal {

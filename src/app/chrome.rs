@@ -11,6 +11,7 @@ impl Workspace {
         let background = self.color(&self.config.theme.background);
         div()
             .id("buffer-tabs")
+            .debug_selector(|| "buffer-tabs".into())
             .h(px(48.))
             .flex_shrink_0()
             .flex()
@@ -87,7 +88,7 @@ impl Workspace {
                         if let Err(error) =
                             this.change_document(|documents| documents.select(id), cx)
                         {
-                            this.message = error.to_string();
+                            this.set_message(error.to_string());
                         }
                         this.focus.focus(window);
                         cx.notify();

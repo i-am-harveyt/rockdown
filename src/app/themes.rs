@@ -7,7 +7,7 @@ impl Workspace {
         let presets = match Config::colorschemes(self.config_path.as_deref()) {
             Ok(presets) => presets,
             Err(error) => {
-                self.message = format!("{error:#}");
+                self.set_message(format!("{error:#}"));
                 cx.notify();
                 return;
             }
@@ -54,7 +54,10 @@ impl Workspace {
         };
         if keep {
             if picker.selected != 0 {
-                self.message = format!("{} theme · this session only", self.config.theme.name);
+                self.set_message(format!(
+                    "{} theme · this session only",
+                    self.config.theme.name
+                ));
             }
         } else {
             self.config.theme = picker.original;

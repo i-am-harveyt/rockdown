@@ -86,7 +86,7 @@ impl Workspace {
                 "Close cancelled: recovery session could not be finalized: {error:#}. Check recovery-folder permissions and free space, then close again."
             );
             eprintln!("rockdown: {message}");
-            self.message = message.clone();
+            self.set_message(message.clone());
             self.recovery_error = Some(message);
             cx.notify();
             return false;
