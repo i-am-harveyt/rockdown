@@ -55,6 +55,7 @@ fn assert_writer_chrome(window: &mut VisualTestContext) {
         "ui-mode-control",
         "writer-tabs-toggle",
         "writer-mode-indicator",
+        "writer-chrome-toggle",
         "writer-tools",
         "outline",
         "explorer",
@@ -385,4 +386,102 @@ fn writer_tabs_are_vertical_modal_and_preserve_dirty_documents(cx: &mut TestAppC
         std::fs::read_to_string(dir.path().join("note.md")).unwrap(),
         SOURCE
     );
+}
+
+#[gpui::test]
+fn writer_hidden_chrome_restores_without_reflow_or_losing_document_and_staged_edits(
+    cx: &mut TestAppContext,
+) {
+    let (dir, mut window, view) = workspace(cx);
+    window.simulate_keystrokes("cmd-e A");
+    window.simulate_input(".pending");
+    window.simulate_keystrokes("escape");
+    select_mode(&mut window, "ui-mode-writer");
+    let editor = window.debug_bounds("editor-column").unwrap();
+    let old_help = window.debug_bounds("help").unwrap().center();
+    click(&mut window, "writer-chrome-toggle");
+    assert!(window.debug_bounds("writer-restore-control").is_some());
+    assert_eq!(window.debug_bounds("editor-column").unwrap(), editor);
+    window.simulate_click(old_help, Modifiers::default());
+    window.run_until_parked();
+    // The former Help button must no longer intercept editor interaction.
+    window.simulate_keystrokes("g g 0 i");
+    window.simulate_input("hidden ");
+    let hidden = format!("hidden {SOURCE}");
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert!(!app.help);
+        assert_eq!(app.documents.current().buffer.text(), hidden);
+        assert_eq!(app.explorer.buffer.text(), "note.md.pending");
+    });
+    click(&mut window, "writer-restore-control");
+    assert_eq!(window.debug_bounds("editor-column").unwrap(), editor);
+    click(&mut window, "help");
+    window.update(|_, cx| assert!(view.read(cx).help));
+    window.simulate_input("blocked by restored help");
+    window.update(|_, cx| assert_eq!(view.read(cx).documents.current().buffer.text(), hidden));
+    click(&mut window, "close-help");
+
+    // These two shortcut spellings must toggle the same Writer-only state.
+    window.simulate_keystrokes("escape cmd-alt-s");
+    window.run_until_parked();
+    assert_eq!(window.debug_bounds("editor-column").unwrap(), editor);
+    window.simulate_click(old_help, Modifiers::default());
+    window.simulate_keystrokes("g g 0 i");
+    window.simulate_input("shortcut ");
+    let shortcut = format!("shortcut {hidden}");
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert!(!app.help);
+        assert_eq!(app.documents.current().buffer.text(), shortcut);
+    });
+    window.simulate_keystrokes("ctrl-alt-s");
+    window.run_until_parked();
+    click(&mut window, "help");
+    window.update(|_, cx| assert!(view.read(cx).help));
+    click(&mut window, "close-help");
+
+    window.simulate_keystrokes("escape :");
+    window.simulate_input("statusbar");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    assert_eq!(window.debug_bounds("editor-column").unwrap(), editor);
+    window.simulate_click(old_help, Modifiers::default());
+    window.simulate_keystrokes("g g 0 i");
+    window.simulate_input("command ");
+    let edited = format!("command {shortcut}");
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert!(!app.help);
+        assert_eq!(app.documents.current().buffer.text(), edited);
+    });
+    // Command entry and error feedback remain usable while controls are hidden.
+    window.simulate_keystrokes("escape :");
+    window.simulate_input("not-a-command");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    window.update(|_, cx| assert!(view.read(cx).message.contains("Unknown command")));
+    assert_eq!(window.debug_bounds("editor-column").unwrap(), editor);
+    click(&mut window, "dismiss-feedback");
+    window.simulate_keystrokes(":");
+    window.simulate_input("statusbar");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    assert_eq!(window.debug_bounds("editor-column").unwrap(), editor);
+    // The recovered mode control must actually work, not just retain bounds.
+    select_mode(&mut window, "ui-mode-dev");
+    let dev_editor = window.debug_bounds("editor-column").unwrap();
+    assert!(dev_editor.top() > editor.top());
+    assert!(dev_editor.bottom() < editor.bottom());
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert_eq!(app.documents.current().buffer.text(), edited);
+        assert!(app.explorer.dirty());
+        assert_eq!(app.explorer.buffer.text(), "note.md.pending");
+    });
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("note.md")).unwrap(),
+        SOURCE
+    );
+    assert!(!dir.path().join("note.md.pending").exists());
 }

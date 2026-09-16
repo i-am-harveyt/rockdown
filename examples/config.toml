@@ -6,7 +6,7 @@ line_height = 30
 # Markdown column maximum in logical pixels (320–1600); shrinks with the window.
 writing_width = 820
 markdown_line_numbers = false
-# Dev startup bars; in Writer, tab-bar opens the Tabs popup.
+# Dev startup bars; in Writer, tab-bar opens Tabs and status-bar hides/shows floating controls.
 tab_bar_visible = true
 status_bar_visible = true
 # Pasted/dropped images are copied beside the Markdown file into this child path.

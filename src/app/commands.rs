@@ -15,6 +15,10 @@ impl Workspace {
         }
     }
     fn action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
+        if self.ui_mode == UiMode::Writer && action == "status-bar" {
+            self.toggle_writer_chrome(window, cx);
+            return Ok(());
+        }
         if action == "ui-mode" {
             self.toggle_ui_mode_picker(window, cx);
             return Ok(());
@@ -283,6 +287,7 @@ impl Workspace {
                 self.toggle_writer_tabs(window, cx);
             }
             "tabbar" => self.config.tab_bar_visible = !self.config.tab_bar_visible,
+            "statusbar" if self.ui_mode == UiMode::Writer => self.toggle_writer_chrome(window, cx),
             "statusbar" => {
                 self.config.status_bar_visible = !self.config.status_bar_visible;
                 self.set_message(String::new());

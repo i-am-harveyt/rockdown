@@ -486,7 +486,7 @@ pub(super) const HELP: &[HelpSection] = &[
             ),
             (
                 "Ctrl/Cmd-Alt-S · :statusbar",
-                "Show / hide the Dev status bar",
+                "Toggle Dev status bar / Writer floating controls",
             ),
             ("Ctrl/Cmd-Shift-T", "Open the live theme picker"),
             (":theme", "Preview a built-in or file colorscheme"),
@@ -497,6 +497,7 @@ pub(super) const HELP: &[HelpSection] = &[
         ],
         notes: &[
             "The top-right mode control has the same position and size in both modes. Writer places Tabs beside the bottom-left Vim letter; it opens a vertical document list. Outline / Files / Help float beside the bottom-right controls. Click outside a floating window to dismiss it.",
+            "Writer's page extends behind the floating controls. Hide (or Ctrl/Cmd-Alt-S / :statusbar) closes tools and hides the controls; Show or the same shortcut restores them without resizing the page. Tool shortcuts and command/error feedback remain available while hidden.",
             "Mode choices are session-only. Switching preserves edits and staged Files changes; returning to Dev restores its previous Files and Terminal visibility. Themes remain available through the shortcut or :theme, with no theme button in either mode.",
             "Bar toggles last for this session. Set tab_bar_visible and status_bar_visible in your config for startup; :config restores those settings. Notifications disappear after five seconds (× dismisses sooner); new notifications restart the timer. Command/search input never expires, even when the status bar is hidden.",
             "Rockdown and Paper are built in. Add colorscheme/*.toml beside your config file for other themes; reopen the picker to discover changes. Set [theme] preset to the filename without .toml for startup.",

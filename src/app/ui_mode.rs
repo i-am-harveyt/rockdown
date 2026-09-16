@@ -24,6 +24,7 @@ impl Workspace {
             self.terminal_visible = false;
         }
         self.ui_mode = mode;
+        self.writer_chrome_visible = true;
         self.explorer_resize = None;
         self.writer_tabs_open = false;
         self.help = false;
@@ -49,6 +50,20 @@ impl Workspace {
             self.finish_theme_picker(false, cx);
             self.set_pane(Pane::Editor, cx);
             self.ui_mode_picker = Some(self.ui_mode);
+        }
+        self.focus.focus(window);
+        cx.notify();
+    }
+
+    pub(super) fn toggle_writer_chrome(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.writer_chrome_visible = !self.writer_chrome_visible;
+        if !self.writer_chrome_visible {
+            self.writer_tabs_open = false;
+            self.help = false;
+            self.dismiss_outline();
+            self.finish_theme_picker(false, cx);
+            self.ui_mode_picker = None;
+            self.set_pane(Pane::Editor, cx);
         }
         self.focus.focus(window);
         cx.notify();
@@ -216,6 +231,31 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let accent = self.color(&self.config.theme.accent);
+        if !self.writer_chrome_visible {
+            return div().absolute().inset_0().child(
+                self.mode_glass()
+                    .id("writer-restore-control")
+                    .debug_selector(|| "writer-restore-control".into())
+                    .absolute()
+                    .bottom(px(16.))
+                    .left(px(16.))
+                    .h(px(32.))
+                    .px_3()
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(11.))
+                    .cursor_pointer()
+                    .occlude()
+                    .hover(|style| style.bg(accent.opacity(0.2)))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_writer_chrome(window, cx);
+                        cx.stop_propagation();
+                    }))
+                    .child("Show"),
+            );
+        }
         div()
             .absolute()
             .inset_0()
@@ -259,6 +299,29 @@ impl Workspace {
                         cx.stop_propagation();
                     }))
                     .child("Tabs"),
+            )
+            .child(
+                self.mode_glass()
+                    .id("writer-chrome-toggle")
+                    .debug_selector(|| "writer-chrome-toggle".into())
+                    .absolute()
+                    .bottom(px(16.))
+                    .left(px(112.))
+                    .size(px(40.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .cursor_pointer()
+                    .occlude()
+                    .hover(|style| style.bg(accent.opacity(0.2)))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_writer_chrome(window, cx);
+                        cx.stop_propagation();
+                    }))
+                    .child("Hide"),
             )
             .child(
                 div()

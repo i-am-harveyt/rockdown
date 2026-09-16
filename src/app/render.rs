@@ -432,8 +432,16 @@ impl Render for Workspace {
                                 feedback
                                     .absolute()
                                     .bottom(px(16.))
-                                    .left(px(116.))
-                                    .right(px(192.))
+                                    .left(px(if self.writer_chrome_visible {
+                                        164.
+                                    } else {
+                                        84.
+                                    }))
+                                    .right(px(if self.writer_chrome_visible {
+                                        192.
+                                    } else {
+                                        16.
+                                    }))
                                     .rounded_xl()
                                     .border_1()
                                     .border_color(muted.opacity(0.25))
@@ -478,6 +486,8 @@ impl Render for Workspace {
             .when(self.ui_mode_picker.is_some(), |root| {
                 root.child(self.ui_mode_selector(cx))
             })
-            .child(self.ui_mode_control(cx))
+            .when(!writer || self.writer_chrome_visible, |root| {
+                root.child(self.ui_mode_control(cx))
+            })
     }
 }

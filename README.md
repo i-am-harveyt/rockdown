@@ -157,6 +157,7 @@ clicking outside closes the selector. The mode is session-only and starts in **D
   - Bottom-left Vim indicator shows **N**, **I**, or **V** only.
   - **Tabs**, immediately to its right, opens a scrollable vertical document list above it.
     Click a document to switch, use its × to close it, or dismiss the popup with **Esc** / an outside click.
+  - **Hide** hides the floating controls and closes open tools; **Show** restores the controls.
   - Bottom-right **Outline / Files / Help** group opens dismissible floating windows.
   - Files retains Vim editing, staged changes, navigation, and `:w` commits.
     **Esc** in Files Normal mode dismisses it; in Insert mode, the first Esc returns to Normal.
@@ -167,8 +168,10 @@ Switching modes preserves document edits and staged Files changes. Returning to 
 restores its prior Files/Terminal visibility without restarting the shell.
 Writer's editor fills the window behind its floating controls without reserved top/bottom bands.
 The mode control keeps the same size and position in both modes.
-In Writer, **Cmd/Ctrl-Alt-T** / `:tabbar` toggles the Tabs popup.
-Commands, searches, and notifications appear as floating feedback without resizing the page.
+In Writer, **Cmd/Ctrl-Alt-T** / `:tabbar` toggles the Tabs popup, and
+**Cmd/Ctrl-Alt-S** / `:statusbar` hides or restores the floating controls without changing Dev's bar settings.
+Tool shortcuts remain available while controls are hidden. Commands, searches, and notifications
+still appear as floating feedback without resizing the page, so errors are not lost.
 Themes have **no button in either mode**; use **Cmd/Ctrl-Shift-T** or `:theme`.
 
 ## Markdown editing
