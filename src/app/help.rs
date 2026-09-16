@@ -1,4 +1,7 @@
-use super::{UiMode, Workspace};
+use super::{
+    UiMode, Workspace,
+    ui_mode::{WRITER_POPUP_BOTTOM, WRITER_POPUP_TOP},
+};
 use gpui::{prelude::*, *};
 
 impl Workspace {
@@ -20,7 +23,12 @@ impl Workspace {
             .occlude()
             .bg(black().opacity(0.28))
             .when(self.ui_mode == UiMode::Writer, |overlay| {
-                overlay.bg(transparent_black()).justify_end()
+                overlay
+                    .bg(transparent_black())
+                    .justify_end()
+                    .items_end()
+                    .pt(px(WRITER_POPUP_TOP))
+                    .pb(px(WRITER_POPUP_BOTTOM))
             })
             .on_click(cx.listener(|this, _, _, cx| {
                 this.help = false;
@@ -496,7 +504,7 @@ pub(super) const HELP: &[HelpSection] = &[
             ("--config PATH", "Launch with an explicit TOML config"),
         ],
         notes: &[
-            "The top-right mode control has the same position and size in both modes. Writer places Tabs beside the bottom-left Vim letter; it opens a vertical document list. Outline / Files / Help float beside the bottom-right controls. Click outside a floating window to dismiss it.",
+            "The top-right mode control has the same position and size in both modes. Writer places Tabs beside the bottom-left Vim letter; it opens a vertical document list. Outline / Files / Help float above the bottom-right controls with aligned lower edges. Click outside a floating window to dismiss it.",
             "Writer's page extends behind the floating controls. Hide (or Ctrl/Cmd-Alt-S / :statusbar) closes tools and hides the controls; Show or the same shortcut restores them without resizing the page. Tool shortcuts and command/error feedback remain available while hidden.",
             "Mode choices are session-only. Switching preserves edits and staged Files changes; returning to Dev restores its previous Files and Terminal visibility. Themes remain available through the shortcut or :theme, with no theme button in either mode.",
             "Bar toggles last for this session. Set tab_bar_visible and status_bar_visible in your config for startup; :config restores those settings. Notifications disappear after five seconds (× dismisses sooner); new notifications restart the timer. Command/search input never expires, even when the status bar is hidden.",

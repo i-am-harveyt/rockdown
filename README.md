@@ -158,7 +158,7 @@ clicking outside closes the selector. The mode is session-only and starts in **D
   - **Tabs**, immediately to its right, opens a scrollable vertical document list above it.
     Click a document to switch, use its × to close it, or dismiss the popup with **Esc** / an outside click.
   - **Hide** hides the floating controls and closes open tools; **Show** restores the controls.
-  - Bottom-right **Outline / Files / Help** group opens dismissible floating windows.
+  - Bottom-right **Outline / Files / Help** group opens dismissible windows with aligned bottom edges.
   - Files retains Vim editing, staged changes, navigation, and `:w` commits.
     **Esc** in Files Normal mode dismisses it; in Insert mode, the first Esc returns to Normal.
   - The terminal shortcut still works, opening a floating terminal (**T** indicator).

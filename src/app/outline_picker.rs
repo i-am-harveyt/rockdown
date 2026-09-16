@@ -1,4 +1,7 @@
-use super::{OutlinePicker, Pane, UiMode, Workspace};
+use super::{
+    OutlinePicker, Pane, UiMode, Workspace,
+    ui_mode::{WRITER_POPUP_BOTTOM, WRITER_POPUP_TOP},
+};
 use gpui::{prelude::*, *};
 
 impl Workspace {
@@ -93,6 +96,12 @@ impl Workspace {
             .items_center()
             .justify_end()
             .occlude()
+            .when(self.ui_mode == UiMode::Writer, |overlay| {
+                overlay
+                    .items_end()
+                    .pt(px(WRITER_POPUP_TOP))
+                    .pb(px(WRITER_POPUP_BOTTOM))
+            })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.dismiss_outline();
                 this.focus.focus(window);

@@ -389,6 +389,31 @@ fn writer_tabs_are_vertical_modal_and_preserve_dirty_documents(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn writer_tool_popups_share_bottom_anchor_at_short_and_tall_window_sizes(cx: &mut TestAppContext) {
+    let (_dir, mut window, _view) = workspace(cx);
+    select_mode(&mut window, "ui-mode-writer");
+    for height in [480., 900.] {
+        window.simulate_resize(size(px(720.), px(height)));
+        window.run_until_parked();
+        // Capture each current popup immediately after opening it. Removed
+        // selectors retain historical bounds and cannot prove dismissal.
+        click(&mut window, "outline");
+        let outline = window.debug_bounds("outline-panel").unwrap();
+        click(&mut window, "explorer");
+        let files = window.debug_bounds("writer-files").unwrap();
+        click(&mut window, "help");
+        let help = window.debug_bounds("help-sheet").unwrap();
+        assert!(outline.bottom() < window.debug_bounds("help").unwrap().top());
+        assert_eq!(files.bottom(), outline.bottom());
+        assert_eq!(help.bottom(), outline.bottom());
+        assert!(outline.top() >= px(0.));
+        assert!(files.top() >= px(0.));
+        assert!(help.top() >= px(0.));
+        click(&mut window, "close-help");
+    }
+}
+
+#[gpui::test]
 fn writer_hidden_chrome_restores_without_reflow_or_losing_document_and_staged_edits(
     cx: &mut TestAppContext,
 ) {
