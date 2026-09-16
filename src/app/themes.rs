@@ -1,4 +1,4 @@
-use super::{ThemePicker, Workspace};
+use super::{Pane, ThemePicker, UiMode, Workspace};
 use crate::config::Config;
 use gpui::{prelude::*, *};
 
@@ -13,7 +13,11 @@ impl Workspace {
             }
         };
         self.help = false;
+        self.writer_tabs_open = false;
         self.dismiss_outline();
+        if self.ui_mode == UiMode::Writer {
+            self.set_pane(Pane::Editor, cx);
+        }
         self.theme_picker = Some(ThemePicker {
             original: self.config.theme.clone(),
             original_markdown: self.config.markdown.clone(),

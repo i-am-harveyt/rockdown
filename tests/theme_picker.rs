@@ -116,8 +116,7 @@ fn preview_cancel_and_confirm_preserve_document_and_typography(cx: &mut TestAppC
 #[gpui::test]
 fn mouse_picker_fits_minimum_window_and_outside_click_cancels(cx: &mut TestAppContext) {
     let (_dir, mut window, view) = workspace(cx);
-    let button = window.debug_bounds("themes").unwrap();
-    window.simulate_click(button.center(), Modifiers::default());
+    window.simulate_keystrokes("cmd-shift-t");
     window.run_until_parked();
     let picker = window.debug_bounds("theme-selector").unwrap();
     let last = window.debug_bounds("theme-option-3").unwrap();

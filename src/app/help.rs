@@ -1,4 +1,7 @@
-use super::Workspace;
+use super::{
+    UiMode, Workspace,
+    ui_mode::{WRITER_POPUP_BOTTOM, WRITER_POPUP_TOP},
+};
 use gpui::{prelude::*, *};
 
 impl Workspace {
@@ -19,6 +22,14 @@ impl Workspace {
             .justify_center()
             .occlude()
             .bg(black().opacity(0.28))
+            .when(self.ui_mode == UiMode::Writer, |overlay| {
+                overlay
+                    .bg(transparent_black())
+                    .justify_end()
+                    .items_end()
+                    .pt(px(WRITER_POPUP_TOP))
+                    .pb(px(WRITER_POPUP_BOTTOM))
+            })
             .on_click(cx.listener(|this, _, _, cx| {
                 this.help = false;
                 cx.notify();
@@ -41,11 +52,20 @@ impl Workspace {
                     .bg(panel)
                     .border_1()
                     .border_color(muted.opacity(0.2))
+                    .when(self.ui_mode == UiMode::Writer, |sheet| {
+                        sheet
+                            .max_w(px(560.))
+                            .bg(panel.opacity(0.96))
+                            .border_color(foreground.opacity(0.2))
+                    })
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
                             .px_6()
                             .py_4()
+                            .when(self.ui_mode == UiMode::Writer, |header| {
+                                header.px_4().py_2()
+                            })
                             .flex_shrink_0()
                             .flex()
                             .items_center()
@@ -57,6 +77,9 @@ impl Workspace {
                                             .text_size(px(11.))
                                             .text_color(accent)
                                             .font_weight(FontWeight::SEMIBOLD)
+                                            .when(self.ui_mode == UiMode::Writer, |label| {
+                                                label.hidden()
+                                            })
                                             .child("ROCKDOWN / REFERENCE"),
                                     )
                                     .child(
@@ -64,7 +87,14 @@ impl Workspace {
                                             .mt_1()
                                             .text_size(px(24.))
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .child("Make yourself at home."),
+                                            .when(self.ui_mode == UiMode::Writer, |title| {
+                                                title.mt_0().text_size(px(16.))
+                                            })
+                                            .child(if self.ui_mode == UiMode::Writer {
+                                                "Help"
+                                            } else {
+                                                "Make yourself at home."
+                                            }),
                                     ),
                             )
                             .child(
@@ -108,6 +138,9 @@ impl Workspace {
                                     .rounded_md()
                                     .cursor_pointer()
                                     .text_size(px(12.))
+                                    .when(self.ui_mode == UiMode::Writer, |topic| {
+                                        topic.px_2().py_1().text_size(px(11.))
+                                    })
                                     .font_weight(if selected {
                                         FontWeight::SEMIBOLD
                                     } else {
@@ -137,6 +170,9 @@ impl Workspace {
                             .overflow_y_scroll()
                             .px_6()
                             .py_5()
+                            .when(self.ui_mode == UiMode::Writer, |content| {
+                                content.px_4().py_3()
+                            })
                             .bg(background)
                             .border_t_1()
                             .border_color(muted.opacity(0.12))
@@ -154,49 +190,58 @@ impl Workspace {
                                     .text_color(muted)
                                     .child(section.summary),
                             )
-                            .when(section.title == "Appearance", |content| {
-                                content.child(
-                                    div().flex().gap_2().mb_3().children(
-                                        [
-                                            ("tab-bar", "Tab bar", self.config.tab_bar_visible),
-                                            (
-                                                "status-bar",
-                                                "Status bar",
-                                                self.config.status_bar_visible,
+                            .when(
+                                section.title == "Appearance" && self.ui_mode == UiMode::Dev,
+                                |content| {
+                                    content.child(
+                                        div().flex().gap_2().mb_3().children(
+                                            [
+                                                ("tab-bar", "Tab bar", self.config.tab_bar_visible),
+                                                (
+                                                    "status-bar",
+                                                    "Status bar",
+                                                    self.config.status_bar_visible,
+                                                ),
+                                            ]
+                                            .into_iter()
+                                            .map(
+                                                |(action, label, visible)| {
+                                                    div()
+                                                        .id(action)
+                                                        .debug_selector(move || action.into())
+                                                        .px_3()
+                                                        .py_2()
+                                                        .rounded_md()
+                                                        .cursor_pointer()
+                                                        .bg(panel)
+                                                        .text_color(if visible {
+                                                            accent
+                                                        } else {
+                                                            muted
+                                                        })
+                                                        .hover(|style| {
+                                                            style.bg(muted.opacity(0.12))
+                                                        })
+                                                        .child(format!(
+                                                            "{label}: {}",
+                                                            if visible {
+                                                                "Shown"
+                                                            } else {
+                                                                "Hidden"
+                                                            }
+                                                        ))
+                                                        .on_click(cx.listener(
+                                                            move |this, _, window, cx| {
+                                                                this.run_action(action, window, cx);
+                                                                cx.stop_propagation();
+                                                            },
+                                                        ))
+                                                },
                                             ),
-                                        ]
-                                        .into_iter()
-                                        .map(
-                                            |(action, label, visible)| {
-                                                div()
-                                                    .id(action)
-                                                    .debug_selector(move || action.into())
-                                                    .px_3()
-                                                    .py_2()
-                                                    .rounded_md()
-                                                    .cursor_pointer()
-                                                    .bg(panel)
-                                                    .text_color(if visible {
-                                                        accent
-                                                    } else {
-                                                        muted
-                                                    })
-                                                    .hover(|style| style.bg(muted.opacity(0.12)))
-                                                    .child(format!(
-                                                        "{label}: {}",
-                                                        if visible { "Shown" } else { "Hidden" }
-                                                    ))
-                                                    .on_click(cx.listener(
-                                                        move |this, _, window, cx| {
-                                                            this.run_action(action, window, cx);
-                                                            cx.stop_propagation();
-                                                        },
-                                                    ))
-                                            },
                                         ),
-                                    ),
-                                )
-                            })
+                                    )
+                                },
+                            )
                             .children(section.shortcuts.iter().enumerate().map(
                                 |(index, (keys, description))| {
                                     div()
@@ -258,6 +303,9 @@ impl Workspace {
                         div()
                             .px_6()
                             .py_3()
+                            .when(self.ui_mode == UiMode::Writer, |footer| {
+                                footer.px_4().py_2()
+                            })
                             .flex_shrink_0()
                             .flex()
                             .items_center()
@@ -439,12 +487,16 @@ pub(super) const HELP: &[HelpSection] = &[
         title: "Appearance",
         summary: "Make the workspace yours without interrupting your writing.",
         shortcuts: &[
-            ("Ctrl/Cmd-Alt-T · :tabbar", "Show / hide the tab bar"),
-            ("Ctrl/Cmd-Alt-S · :statusbar", "Show / hide the status bar"),
+            ("Ctrl/Cmd-Shift-M · :uimode", "Choose Dev or Writer mode"),
             (
-                "Ctrl/Cmd-Shift-T",
-                "Open the live theme picker; also available in the footer",
+                "Ctrl/Cmd-Alt-T · :tabbar",
+                "Toggle Dev tabs / Writer Tabs popup",
             ),
+            (
+                "Ctrl/Cmd-Alt-S · :statusbar",
+                "Toggle Dev status bar / Writer floating controls",
+            ),
+            ("Ctrl/Cmd-Shift-T", "Open the live theme picker"),
             (":theme", "Preview a built-in or file colorscheme"),
             ("↑ / ↓ · j / k", "Preview themes; hover works too"),
             ("Enter / Esc", "Keep a theme / cancel the preview"),
@@ -452,6 +504,9 @@ pub(super) const HELP: &[HelpSection] = &[
             ("--config PATH", "Launch with an explicit TOML config"),
         ],
         notes: &[
+            "The top-right mode control has the same position and size in both modes. Writer places Tabs beside the bottom-left Vim letter; it opens a vertical document list. Outline / Files / Help float above the bottom-right controls with aligned lower edges. Click outside a floating window to dismiss it.",
+            "Writer's page extends behind the floating controls. Hide (or Ctrl/Cmd-Alt-S / :statusbar) closes tools and hides the controls; Show or the same shortcut restores them without resizing the page. Tool shortcuts and command/error feedback remain available while hidden.",
+            "Mode choices are session-only. Switching preserves edits and staged Files changes; returning to Dev restores its previous Files and Terminal visibility. Themes remain available through the shortcut or :theme, with no theme button in either mode.",
             "Bar toggles last for this session. Set tab_bar_visible and status_bar_visible in your config for startup; :config restores those settings. Notifications disappear after five seconds (× dismisses sooner); new notifications restart the timer. Command/search input never expires, even when the status bar is hidden.",
             "Rockdown and Paper are built in. Add colorscheme/*.toml beside your config file for other themes; reopen the picker to discover changes. Set [theme] preset to the filename without .toml for startup.",
             "Theme choices are session-only and replace Markdown color overrides, not typography. Current theme or cancel restores custom colors; :config reloads the configured theme and its file.",

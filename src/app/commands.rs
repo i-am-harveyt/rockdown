@@ -1,4 +1,4 @@
-use super::{Pane, Workspace, bind_config_keys};
+use super::{Pane, UiMode, Workspace, bind_config_keys};
 use crate::{config::Config, explorer::Explorer};
 use anyhow::{Result, bail};
 use gpui::*;
@@ -15,6 +15,54 @@ impl Workspace {
         }
     }
     fn action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
+        if self.ui_mode == UiMode::Writer && action == "status-bar" {
+            self.toggle_writer_chrome(window, cx);
+            return Ok(());
+        }
+        if action == "ui-mode" {
+            self.toggle_ui_mode_picker(window, cx);
+            return Ok(());
+        }
+        if self.ui_mode_picker.is_some() {
+            return Ok(());
+        }
+        if self.ui_mode == UiMode::Writer && action == "tab-bar" {
+            self.toggle_writer_tabs(window, cx);
+            return Ok(());
+        }
+        if self.writer_tabs_open
+            && !matches!(
+                action,
+                "explorer"
+                    | "terminal"
+                    | "help"
+                    | "outline"
+                    | "themes"
+                    | "editor"
+                    | "previous-buffer"
+                    | "next-buffer"
+                    | "buffer-delete"
+            )
+        {
+            return Ok(());
+        }
+        if self.ui_mode == UiMode::Writer
+            && matches!(action, "help" | "outline" | "explorer" | "terminal")
+        {
+            self.writer_tabs_open = false;
+            self.finish_theme_picker(false, cx);
+            if action != "help" {
+                self.help = false;
+            }
+            if action != "outline" {
+                self.dismiss_outline();
+            }
+            if (self.pane == Pane::Explorer && action != "explorer")
+                || (self.pane == Pane::Terminal && action != "terminal")
+            {
+                self.set_pane(Pane::Editor, cx);
+            }
+        }
         if self.help
             && !matches!(
                 action,
@@ -63,7 +111,10 @@ impl Workspace {
             }
             "explorer" => self.toggle_explorer(cx),
             "terminal" => self.toggle_terminal(cx)?,
-            "editor" => self.set_pane(Pane::Editor, cx),
+            "editor" => {
+                self.writer_tabs_open = false;
+                self.set_pane(Pane::Editor, cx);
+            }
             "help" => {
                 self.dismiss_outline();
                 self.help = !self.help;
@@ -222,10 +273,21 @@ impl Workspace {
             }
             "term" | "terminal" => self.toggle_terminal(cx)?,
             "ex" | "explorer" => self.set_pane(Pane::Explorer, cx),
-            "help" => self.help = true,
+            "help" => {
+                self.dismiss_outline();
+                if self.ui_mode == UiMode::Writer {
+                    self.set_pane(Pane::Editor, cx);
+                }
+                self.help = true;
+            }
             "theme" | "themes" => self.open_theme_picker(cx),
             "outline" => self.toggle_outline(cx),
+            "uimode" => self.toggle_ui_mode_picker(window, cx),
+            "tabbar" if self.ui_mode == UiMode::Writer => {
+                self.toggle_writer_tabs(window, cx);
+            }
             "tabbar" => self.config.tab_bar_visible = !self.config.tab_bar_visible,
+            "statusbar" if self.ui_mode == UiMode::Writer => self.toggle_writer_chrome(window, cx),
             "statusbar" => {
                 self.config.status_bar_visible = !self.config.status_bar_visible;
                 self.set_message(String::new());

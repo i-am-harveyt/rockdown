@@ -1,4 +1,4 @@
-use super::{Pane, Workspace};
+use super::{Pane, UiMode, Workspace};
 use crate::terminal::Terminal;
 use anyhow::Result;
 use gpui::*;
@@ -9,6 +9,13 @@ impl Workspace {
         self.viewport_alignment = None;
         self.preferred_visual_x = None;
         self.mouse_anchor = None;
+        if self.ui_mode == UiMode::Writer {
+            self.explorer_visible = pane == Pane::Explorer;
+            self.terminal_visible = pane == Pane::Terminal;
+            if pane != Pane::Editor {
+                self.writer_tabs_open = false;
+            }
+        }
         if pane == Pane::Explorer {
             self.explorer_visible = true;
         }

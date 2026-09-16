@@ -1,4 +1,4 @@
-use super::{Pane, Workspace};
+use super::{Pane, UiMode, Workspace};
 use crate::surface::Surface;
 use gpui::{prelude::*, *};
 
@@ -20,8 +20,22 @@ impl Workspace {
             .gap_2()
             .overflow_x_scroll()
             .bg(panel)
-            .border_b_1()
-            .border_color(muted.opacity(0.12))
+            .when(self.ui_mode == UiMode::Writer, |tabs| {
+                tabs.bg(transparent_black())
+                    .h_auto()
+                    .min_h_0()
+                    .flex_1()
+                    .flex_shrink()
+                    .flex_col()
+                    .items_start()
+                    .py_3()
+                    .overflow_x_hidden()
+                    .overflow_y_scroll()
+            })
+            .when(
+                self.ui_mode == UiMode::Dev && !cfg!(target_os = "macos"),
+                |tabs| tabs.pr(px(144.)),
+            )
             .text_xs()
             .children(self.documents.entries().iter().map(|entry| {
                 let id = entry.id;
@@ -49,6 +63,7 @@ impl Workspace {
                     .unwrap_or_else(|| "Untitled".into());
                 div()
                     .id(("buffer-tab", id))
+                    .debug_selector(move || format!("buffer-tab-{id}"))
                     .tooltip(move |_, cx| {
                         cx.new(|_| ControlTooltip {
                             label: path.clone().into(),
@@ -59,6 +74,7 @@ impl Workspace {
                         .into()
                     })
                     .h(px(32.))
+                    .when(self.ui_mode == UiMode::Writer, |tab| tab.w_full())
                     .rounded_md()
                     .px_3()
                     .flex()
@@ -90,15 +106,24 @@ impl Workspace {
                         {
                             this.set_message(error.to_string());
                         }
+                        this.writer_tabs_open = false;
                         this.focus.focus(window);
                         cx.notify();
                     }))
-                    .child(label)
+                    .child(
+                        div()
+                            .when(self.ui_mode == UiMode::Writer, |label| {
+                                label.min_w_0().flex_1().overflow_hidden().text_ellipsis()
+                            })
+                            .child(label),
+                    )
                     .child(
                         div()
                             .id(("close-buffer", id))
+                            .debug_selector(move || format!("close-buffer-{id}"))
                             .w(px(22.))
                             .h(px(22.))
+                            .flex_shrink_0()
                             .flex()
                             .items_center()
                             .justify_center()
@@ -151,6 +176,15 @@ impl Workspace {
             }))
             .hover(|style| style.bg(accent.opacity(0.2)).text_color(accent))
             .active(|style| style.bg(accent.opacity(0.3)))
+            .when(self.ui_mode == UiMode::Writer, |button| {
+                button
+                    .size(px(40.))
+                    .rounded_full()
+                    .bg(background.opacity(0.88))
+                    .border_1()
+                    .border_color(foreground.opacity(0.24))
+                    .shadow_md()
+            })
             .tooltip(move |_, cx| {
                 cx.new(|_| ControlTooltip {
                     label: label.into(),
@@ -218,7 +252,10 @@ impl Workspace {
                 )
                 .size(px(20.)),
             )
-            .when(action == "outline", |button| button.child("Outline"))
+            .when(
+                action == "outline" && self.ui_mode == UiMode::Dev,
+                |button| button.child("Outline"),
+            )
     }
     pub(super) fn surface(&self, pane: Pane, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -249,6 +286,8 @@ impl Workspace {
                 surface.on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                     if !this.help
                         && this.theme_picker.is_none()
+                        && this.ui_mode_picker.is_none()
+                        && !this.writer_tabs_open
                         && this.outline_picker.is_none()
                         && this.command.is_none()
                     {
