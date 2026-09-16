@@ -541,6 +541,34 @@ Use `:config` to reload settings in the app. A changed shell setting applies to 
 - Files must be UTF-8. The explorer rejects filenames it cannot represent safely as individual text lines.
 - Recovery is separate from saving: Markdown files are never automatically saved. Checkpoints are periodic, and undo history and staged filesystem operations do not survive a restart.
 
+## Source layout
+
+The larger subsystems keep their public types and entry points in `src/<module>.rs`,
+with private implementation modules under `src/<module>/`. Public imports remain
+`rockdown::app`, `rockdown::vim`, and `rockdown::surface`; the child files are not
+additional public APIs.
+
+| Area | Where to work |
+| --- | --- |
+| Workspace state and construction | `src/app.rs` |
+| Document lifecycle, recovery, image import | `src/app/{documents,recovery,images}.rs` |
+| Actions, keyboard routing, IME/text input | `src/app/{commands,keyboard,text_input}.rs` |
+| Pane focus, pointer interaction, scrolling | `src/app/{panes,navigation}.rs` |
+| Workspace chrome, panels, rendering | `src/app/{chrome,help,outline_picker,themes,render}.rs` |
+| Buffer state and shared text primitives | `src/vim.rs` |
+| Vim key dispatch, motions, operators | `src/vim/{keys,motions,operators}.rs` |
+| Editing, clipboard, selection, undo, substitution | `src/vim/{editing,clipboard,selection,history,substitution}.rs` |
+| Surface types, layout and hit testing | `src/surface.rs`, `src/surface/layout.rs` |
+| Text, tables, image caching, terminal painting | `src/surface/{text,table,images,terminal,render}.rs` |
+| PTY lifecycle and Windows I/O workers | `src/terminal.rs`, `src/terminal/windows.rs` |
+| Explorer filesystem transactions | `src/explorer.rs` |
+
+Existing unit tests live in private `tests` modules or beside the implementation
+they exercise; end-to-end workspace tests remain under `tests/`. For a focused
+change, start with the owning file rather than loading every sibling. Keep
+cross-module helpers scoped to their parent and split by responsibility, not an
+arbitrary line limit.
+
 ## Development checks
 
 From the repository root:
