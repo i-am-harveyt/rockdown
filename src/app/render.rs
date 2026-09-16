@@ -432,7 +432,7 @@ impl Render for Workspace {
                                 feedback
                                     .absolute()
                                     .bottom(px(16.))
-                                    .left(px(68.))
+                                    .left(px(116.))
                                     .right(px(192.))
                                     .rounded_xl()
                                     .border_1()
@@ -458,6 +458,9 @@ impl Render for Workspace {
                     )
                 },
             )
+            .when(writer && self.writer_tabs_open, |root| {
+                root.child(self.writer_tabs_popup(window, cx))
+            })
             .when(writer && self.explorer_visible, |root| {
                 root.child(self.writer_pane(Pane::Explorer, window, cx))
             })

@@ -12,6 +12,9 @@ impl Workspace {
         if self.ui_mode == UiMode::Writer {
             self.explorer_visible = pane == Pane::Explorer;
             self.terminal_visible = pane == Pane::Terminal;
+            if pane != Pane::Editor {
+                self.writer_tabs_open = false;
+            }
         }
         if pane == Pane::Explorer {
             self.explorer_visible = true;

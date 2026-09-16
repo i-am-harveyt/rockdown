@@ -480,7 +480,10 @@ pub(super) const HELP: &[HelpSection] = &[
         summary: "Make the workspace yours without interrupting your writing.",
         shortcuts: &[
             ("Ctrl/Cmd-Shift-M · :uimode", "Choose Dev or Writer mode"),
-            ("Ctrl/Cmd-Alt-T · :tabbar", "Show / hide the Dev tab bar"),
+            (
+                "Ctrl/Cmd-Alt-T · :tabbar",
+                "Toggle Dev tabs / Writer Tabs popup",
+            ),
             (
                 "Ctrl/Cmd-Alt-S · :statusbar",
                 "Show / hide the Dev status bar",
@@ -493,7 +496,7 @@ pub(super) const HELP: &[HelpSection] = &[
             ("--config PATH", "Launch with an explicit TOML config"),
         ],
         notes: &[
-            "The top-right mode control has the same position and size in both modes. Writer shows a Vim letter at bottom-left. Outline / Files / Help float beside the bottom-right controls. Click outside a floating window to dismiss it.",
+            "The top-right mode control has the same position and size in both modes. Writer places Tabs beside the bottom-left Vim letter; it opens a vertical document list. Outline / Files / Help float beside the bottom-right controls. Click outside a floating window to dismiss it.",
             "Mode choices are session-only. Switching preserves edits and staged Files changes; returning to Dev restores its previous Files and Terminal visibility. Themes remain available through the shortcut or :theme, with no theme button in either mode.",
             "Bar toggles last for this session. Set tab_bar_visible and status_bar_visible in your config for startup; :config restores those settings. Notifications disappear after five seconds (× dismisses sooner); new notifications restart the timer. Command/search input never expires, even when the status bar is hidden.",
             "Rockdown and Paper are built in. Add colorscheme/*.toml beside your config file for other themes; reopen the picker to discover changes. Set [theme] preset to the filename without .toml for startup.",

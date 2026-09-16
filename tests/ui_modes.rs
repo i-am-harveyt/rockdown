@@ -1,4 +1,4 @@
-use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, px, size};
+use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, point, px, size};
 use rockdown::{
     app::{Pane, Workspace},
     config::Config,
@@ -53,6 +53,7 @@ fn assert_writer_chrome(window: &mut VisualTestContext) {
     assert!(window.debug_bounds("themes").is_none());
     for selector in [
         "ui-mode-control",
+        "writer-tabs-toggle",
         "writer-mode-indicator",
         "writer-tools",
         "outline",
@@ -63,6 +64,122 @@ fn assert_writer_chrome(window: &mut VisualTestContext) {
         assert!(bounds.left() >= px(0.) && bounds.right() <= px(720.));
         assert!(bounds.top() >= px(0.) && bounds.bottom() <= px(480.));
     }
+}
+
+#[gpui::test]
+fn writer_tabs_and_files_preserve_staged_edits_and_restore_dev_panes(cx: &mut TestAppContext) {
+    let (dir, mut window, view) = workspace(cx);
+    window.simulate_keystrokes("cmd-e A");
+    window.simulate_input(".pending");
+    window.simulate_keystrokes("escape");
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert!(app.explorer_visible);
+        assert!(app.explorer.dirty());
+        assert_eq!(app.explorer.buffer.text(), "note.md.pending");
+        assert_eq!(app.documents.current().buffer.text(), SOURCE);
+    });
+
+    window.run_until_parked();
+    let dev_editor = window.debug_bounds("editor-column").unwrap();
+    let dev_mode_control = window.debug_bounds("ui-mode-control").unwrap();
+    assert!(dev_editor.top() > px(0.));
+    assert!(dev_editor.bottom() < px(480.));
+    select_mode(&mut window, "ui-mode-writer");
+    assert_writer_chrome(&mut window);
+    let writer_editor = window.debug_bounds("editor-column").unwrap();
+    assert_eq!(
+        window.debug_bounds("ui-mode-control").unwrap(),
+        dev_mode_control
+    );
+    assert_eq!(writer_editor.top(), px(0.));
+    assert_eq!(writer_editor.bottom(), px(480.));
+    assert!(writer_editor.size.width > dev_editor.size.width);
+    window.simulate_keystrokes(":");
+    window.simulate_input("w");
+    window.run_until_parked();
+    assert_eq!(window.debug_bounds("editor-column").unwrap(), writer_editor);
+    window.simulate_keystrokes("escape");
+    window.update(|_, cx| assert!(!view.read(cx).explorer_visible));
+    window.update(|_, cx| {
+        assert_eq!(view.read(cx).explorer.buffer.text(), "note.md.pending");
+    });
+
+    click(&mut window, "writer-tabs-toggle");
+    let toggle = window.debug_bounds("writer-tabs-toggle").unwrap();
+    let vim = window.debug_bounds("writer-mode-indicator").unwrap();
+    let popup = window.debug_bounds("writer-tabs-popup").unwrap();
+    let tabs = window.debug_bounds("buffer-tabs").unwrap();
+    assert_eq!(toggle.top(), vim.top());
+    assert!(toggle.left() > vim.right());
+    assert_eq!(toggle.size, vim.size);
+    assert!(popup.bottom() < toggle.top());
+    assert!(popup.left() <= toggle.left() && popup.right() >= toggle.right());
+    assert!(popup.left() >= px(0.) && popup.right() <= px(720.));
+    assert!(tabs.top() >= popup.top() && tabs.bottom() <= popup.bottom());
+    assert_eq!(window.debug_bounds("editor-column").unwrap(), writer_editor);
+    click(&mut window, "writer-tabs-toggle");
+    assert_writer_chrome(&mut window);
+
+    click(&mut window, "explorer");
+    let files = window.debug_bounds("writer-files").unwrap();
+    assert!(files.left() >= px(0.) && files.right() <= px(720.));
+    assert!(files.top() >= px(0.) && files.bottom() <= px(480.));
+    window.update(|_, cx| assert!(view.read(cx).pane == Pane::Explorer));
+    window.simulate_keystrokes("A");
+    window.simulate_input(".writer");
+    window.simulate_keystrokes("escape");
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert_eq!(app.explorer.buffer.text(), "note.md.pending.writer");
+        assert!(app.explorer.dirty());
+        assert_eq!(app.documents.current().buffer.text(), SOURCE);
+    });
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("note.md")).unwrap(),
+        SOURCE
+    );
+    assert!(!dir.path().join("note.md.pending.writer").exists());
+
+    let outside = point(px(4.), px(240.));
+    assert!(!files.contains(&outside));
+    window.simulate_click(outside, Modifiers::default());
+    window.run_until_parked();
+    window.update(|_, cx| assert!(!view.read(cx).explorer_visible));
+    window.update(|window, cx| {
+        let app = view.read(cx);
+        assert!(app.pane == Pane::Editor);
+        assert!(app.focus.is_focused(window));
+    });
+    window.simulate_keystrokes("i");
+    window.simulate_input("typed ");
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert_eq!(
+            app.documents.current().buffer.text(),
+            format!("typed {SOURCE}")
+        );
+        assert_eq!(app.explorer.buffer.text(), "note.md.pending.writer");
+    });
+
+    select_mode(&mut window, "ui-mode-dev");
+    assert!(window.debug_bounds("buffer-tabs").is_some());
+    assert!(window.debug_bounds("status-bar").is_some());
+    assert_eq!(window.debug_bounds("editor-column").unwrap(), dev_editor);
+    assert_eq!(
+        window.debug_bounds("ui-mode-control").unwrap(),
+        dev_mode_control
+    );
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert!(app.explorer_visible);
+        assert!(app.explorer.dirty());
+        assert_eq!(app.explorer.buffer.text(), "note.md.pending.writer");
+        assert_eq!(
+            app.documents.current().buffer.text(),
+            format!("typed {SOURCE}")
+        );
+    });
 }
 
 #[gpui::test]
@@ -179,4 +296,93 @@ fn writer_tools_switch_and_close_without_leaking_input_or_restoring_fixed_chrome
         );
     });
     assert_writer_chrome(&mut window);
+}
+
+#[gpui::test]
+fn writer_tabs_are_vertical_modal_and_preserve_dirty_documents(cx: &mut TestAppContext) {
+    let (dir, mut window, view) = workspace(cx);
+    let first = window.update(|_, cx| view.read(cx).documents.active_id());
+    window.simulate_keystrokes("cmd-n i");
+    window.simulate_input("second draft");
+    let second = window.update(|_, cx| view.read(cx).documents.active_id());
+    // GPUI's debug lookup requires static selectors, including dynamic document IDs.
+    static SELECTORS: std::sync::OnceLock<[String; 3]> = std::sync::OnceLock::new();
+    let [first_selector, second_selector, close_second] = SELECTORS.get_or_init(|| {
+        [
+            format!("buffer-tab-{first}"),
+            format!("buffer-tab-{second}"),
+            format!("close-buffer-{second}"),
+        ]
+    });
+    select_mode(&mut window, "ui-mode-writer");
+    click(&mut window, "writer-tabs-toggle");
+    let first_tab = window.debug_bounds(first_selector).unwrap();
+    let second_tab = window.debug_bounds(second_selector).unwrap();
+    assert_eq!(first_tab.left(), second_tab.left());
+    assert_eq!(first_tab.right(), second_tab.right());
+    assert!(second_tab.top() >= first_tab.bottom());
+    window.simulate_input("must not leak");
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert_eq!(app.documents.active_id(), second);
+        assert_eq!(
+            app.documents.get(second).unwrap().buffer.text(),
+            "second draft"
+        );
+        assert_eq!(app.documents.get(first).unwrap().buffer.text(), SOURCE);
+    });
+
+    click(&mut window, first_selector);
+    window.simulate_keystrokes("A");
+    window.simulate_input(" selected");
+    let selected = SOURCE.replacen("intro", "intro selected", 1);
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert_eq!(app.documents.active_id(), first);
+        assert_eq!(app.documents.current().buffer.text(), selected);
+    });
+    click(&mut window, "writer-tabs-toggle");
+    click(&mut window, "writer-tabs-toggle");
+    window.simulate_input(" toggled");
+    let toggled = SOURCE.replacen("intro", "intro selected toggled", 1);
+    window.update(|_, cx| assert_eq!(view.read(cx).documents.current().buffer.text(), toggled));
+
+    click(&mut window, "writer-tabs-toggle");
+    window.simulate_keystrokes("escape");
+    window.simulate_input(" escaped");
+    let escaped = SOURCE.replacen("intro", "intro selected toggled escaped", 1);
+    window.update(|_, cx| assert_eq!(view.read(cx).documents.current().buffer.text(), escaped));
+
+    window.simulate_keystrokes("escape");
+    click(&mut window, "writer-tabs-toggle");
+    let popup = window.debug_bounds("writer-tabs-popup").unwrap();
+    let outside = point(px(4.), px(240.));
+    assert!(!popup.contains(&outside));
+    window.simulate_click(outside, Modifiers::default());
+    window.run_until_parked();
+    // No Escape here: it would conceal a broken outside-click dismissal.
+    window.simulate_keystrokes("g g 0 i");
+    window.simulate_input("outside ");
+    let edited = format!("outside {escaped}");
+    window.update(|_, cx| assert_eq!(view.read(cx).documents.current().buffer.text(), edited));
+
+    click(&mut window, "writer-tabs-toggle");
+    click(&mut window, close_second);
+    cx.simulate_prompt_answer("Cancel");
+    window.run_until_parked();
+    window.update(|_, cx| {
+        let app = view.read(cx);
+        assert_eq!(app.documents.entries().len(), 2);
+        assert_eq!(app.documents.active_id(), first);
+        assert_eq!(app.documents.get(first).unwrap().buffer.text(), edited);
+        assert_eq!(
+            app.documents.get(second).unwrap().buffer.text(),
+            "second draft"
+        );
+        assert!(app.documents.get(second).unwrap().buffer.dirty());
+    });
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("note.md")).unwrap(),
+        SOURCE
+    );
 }

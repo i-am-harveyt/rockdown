@@ -13,6 +13,7 @@ impl Workspace {
             }
         };
         self.help = false;
+        self.writer_tabs_open = false;
         self.dismiss_outline();
         if self.ui_mode == UiMode::Writer {
             self.set_pane(Pane::Editor, cx);

@@ -13,6 +13,7 @@ impl Workspace {
             && !self.help
             && self.theme_picker.is_none()
             && self.ui_mode_picker.is_none()
+            && !self.writer_tabs_open
             && self.outline_picker.is_none()
             && self.command.is_none()
             && self.documents.current().is_markdown()

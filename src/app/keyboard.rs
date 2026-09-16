@@ -14,6 +14,7 @@ impl Workspace {
         if self.theme_picker.is_none()
             && self.outline_picker.is_none()
             && self.ui_mode_picker.is_none()
+            && !self.writer_tabs_open
         {
             self.follow_cursor = true;
             self.viewport_alignment = None;
@@ -63,6 +64,12 @@ impl Workspace {
                     });
                 }
                 _ => {}
+            }
+            return Ok(true);
+        }
+        if self.writer_tabs_open {
+            if key == "escape" {
+                self.writer_tabs_open = false;
             }
             return Ok(true);
         }

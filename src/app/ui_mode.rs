@@ -25,6 +25,7 @@ impl Workspace {
         }
         self.ui_mode = mode;
         self.explorer_resize = None;
+        self.writer_tabs_open = false;
         self.help = false;
         self.dismiss_outline();
         self.finish_theme_picker(false, cx);
@@ -41,6 +42,7 @@ impl Workspace {
     }
 
     pub(super) fn toggle_ui_mode_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.writer_tabs_open = false;
         if self.ui_mode_picker.take().is_none() {
             self.help = false;
             self.dismiss_outline();
@@ -48,6 +50,17 @@ impl Workspace {
             self.set_pane(Pane::Editor, cx);
             self.ui_mode_picker = Some(self.ui_mode);
         }
+        self.focus.focus(window);
+        cx.notify();
+    }
+
+    pub(super) fn toggle_writer_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.writer_tabs_open = !self.writer_tabs_open;
+        self.help = false;
+        self.dismiss_outline();
+        self.finish_theme_picker(false, cx);
+        self.ui_mode_picker = None;
+        self.set_pane(Pane::Editor, cx);
         self.focus.focus(window);
         cx.notify();
     }
@@ -224,6 +237,30 @@ impl Workspace {
                     .child(&mode[..1]),
             )
             .child(
+                self.mode_glass()
+                    .id("writer-tabs-toggle")
+                    .debug_selector(|| "writer-tabs-toggle".into())
+                    .absolute()
+                    .bottom(px(16.))
+                    .left(px(64.))
+                    .size(px(40.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .cursor_pointer()
+                    .occlude()
+                    .when(self.writer_tabs_open, |button| button.text_color(accent))
+                    .hover(|style| style.bg(accent.opacity(0.2)))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_writer_tabs(window, cx);
+                        cx.stop_propagation();
+                    }))
+                    .child("Tabs"),
+            )
+            .child(
                 div()
                     .id("writer-tools")
                     .debug_selector(|| "writer-tools".into())
@@ -241,6 +278,87 @@ impl Workspace {
                     ))
                     .child(self.dock_button("Files", "explorer", self.explorer_visible, cx))
                     .child(self.dock_button("Help", "help", self.help, cx)),
+            )
+    }
+
+    pub(super) fn writer_tabs_popup(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let accent = self.color(&self.config.theme.accent);
+        let muted = self.color(&self.config.theme.muted);
+        let width = (f32::from(window.viewport_size().width) - 32.).clamp(0., 420.);
+        let max_height =
+            (f32::from(window.viewport_size().height) - WRITER_POPUP_TOP - WRITER_POPUP_BOTTOM)
+                .max(0.);
+        let height = (44. + self.documents.entries().len() as f32 * 40. + 16.).min(max_height);
+        div()
+            .id("writer-tabs-overlay")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.writer_tabs_open = false;
+                this.focus.focus(window);
+                cx.notify();
+                cx.stop_propagation();
+            }))
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .child(
+                self.mode_glass()
+                    .id("writer-tabs-popup")
+                    .debug_selector(|| "writer-tabs-popup".into())
+                    .absolute()
+                    .bottom(px(WRITER_POPUP_BOTTOM))
+                    .left(px(16.))
+                    .w(px(width))
+                    .h(px(height))
+                    .rounded_xl()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .h(px(44.))
+                            .flex_shrink_0()
+                            .px_4()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Tabs"),
+                            )
+                            .child(
+                                div()
+                                    .id("close-writer-tabs")
+                                    .debug_selector(|| "close-writer-tabs".into())
+                                    .size(px(28.))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .text_size(px(18.))
+                                    .text_color(muted)
+                                    .hover(|style| {
+                                        style.bg(accent.opacity(0.15)).text_color(accent)
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.writer_tabs_open = false;
+                                        this.focus.focus(window);
+                                        cx.notify();
+                                        cx.stop_propagation();
+                                    }))
+                                    .child("×"),
+                            ),
+                    )
+                    .child(self.buffer_bar(cx)),
             )
     }
 
