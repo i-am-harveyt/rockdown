@@ -1,7 +1,7 @@
 use super::{
     BufferDelete, EditorPane, ExplorerToggle, HelpToggle, NewDocument, NextBuffer, OpenDocument,
-    OutlineToggle, Pane, Paste, PreviousBuffer, Save, SaveAs, StatusBarToggle, TabBarToggle,
-    TerminalToggle, ThemesToggle, UiMode, UiModeToggle, Workspace,
+    OutlineToggle, Pane, Paste, PreviousBuffer, Redo, Save, SaveAs, StatusBarToggle, TabBarToggle,
+    TerminalToggle, ThemesToggle, UiMode, UiModeToggle, Undo, Workspace,
 };
 use crate::vim::Mode;
 use gpui::{prelude::*, *};
@@ -70,6 +70,9 @@ impl Render for Workspace {
             .font_family(".SystemUIFont")
             .text_size(px(13.))
             .track_focus(&self.focus)
+            .when(self.buffer_history_available(), |root| {
+                root.key_context("BufferHistory")
+            })
             .on_key_down(cx.listener(Self::key_down))
             .on_action(
                 cx.listener(|this, _: &Save, window, cx| this.run_action("save", window, cx)),
@@ -87,6 +90,12 @@ impl Render for Workspace {
             )
             .on_action(
                 cx.listener(|this, _: &Paste, window, cx| this.run_action("paste", window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Undo, window, cx| this.run_action("undo", window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Redo, window, cx| this.run_action("redo", window, cx)),
             )
             .on_action(cx.listener(|this, _: &ExplorerToggle, window, cx| {
                 this.run_action("explorer", window, cx)

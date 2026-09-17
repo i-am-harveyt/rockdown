@@ -75,7 +75,7 @@ thickness = 1.5
 # Specifying keys replaces the default shortcut map.
 # Supported actions: new, open, save, save-as, paste (clipboard), explorer (toggle),
 # terminal, editor, help, themes, ui-mode, outline, buffer-delete, previous-buffer, next-buffer.
-# tab-bar, status-bar.
+# tab-bar, status-bar, undo, redo.
 [keys]
 cmd-n = "new"
 ctrl-n = "new"
@@ -107,3 +107,8 @@ cmd-alt-t = "tab-bar"
 ctrl-alt-t = "tab-bar"
 cmd-alt-s = "status-bar"
 ctrl-alt-s = "status-bar"
+
+# History shortcuts: macOS bindings below. On Windows/Linux replace cmd with
+# ctrl, and optionally add ctrl-y = "redo". Terminal keeps its control keys.
+cmd-z = "undo"
+cmd-shift-z = "redo"

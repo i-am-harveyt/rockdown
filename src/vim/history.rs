@@ -15,10 +15,14 @@ impl Buffer {
         self.redo_stack.push(snapshot);
     }
 
+    /// Finish the current typing transaction and undo it, retaining Insert mode.
+    /// Visual selections are cleared; Vim's Normal-mode undo remains Normal.
     pub fn undo(&mut self) {
         self.finish_insert();
         self.reset_command();
-        self.mode = Mode::Normal;
+        if self.mode != Mode::Insert {
+            self.mode = Mode::Normal;
+        }
         self.visual_anchor = None;
         if let Some(previous) = self.undo_stack.pop() {
             let current = self.snapshot();
@@ -28,10 +32,13 @@ impl Buffer {
         self.clamp();
     }
 
+    /// Redo from the shared history, retaining Insert mode and its end-of-line caret.
     pub fn redo(&mut self) {
         self.finish_insert();
         self.reset_command();
-        self.mode = Mode::Normal;
+        if self.mode != Mode::Insert {
+            self.mode = Mode::Normal;
+        }
         self.visual_anchor = None;
         if let Some(next) = self.redo_stack.pop() {
             let current = self.snapshot();
