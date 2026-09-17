@@ -224,3 +224,38 @@ fn empty_history_keeps_insert_caret_and_platform_redo_works(cx: &mut TestAppCont
     });
     assert_eq!(text(&mut window, &view), "界!");
 }
+
+#[gpui::test]
+fn history_keys_preserve_ime_composition_on_both_platform_keymaps(cx: &mut TestAppContext) {
+    let mut config = Config::default();
+    for (key, action) in [
+        ("ctrl-z", "undo"),
+        ("ctrl-shift-z", "redo"),
+        ("ctrl-y", "redo"),
+        ("cmd-z", "undo"),
+        ("cmd-shift-z", "redo"),
+    ] {
+        config.keys.insert(key.into(), action.into());
+    }
+    let (_dir, mut window, view) = workspace(cx, config);
+    window.simulate_keystrokes("i");
+    window.simulate_input("draft");
+    for key in ["ctrl-z", "ctrl-shift-z", "ctrl-y", "cmd-z", "cmd-shift-z"] {
+        window.simulate_keystrokes("escape A");
+        window.update(|window, cx| {
+            view.update(cx, |app, cx| {
+                app.replace_and_mark_text_in_range(None, "中文", None, window, cx);
+            })
+        });
+        window.simulate_keystrokes(key);
+        window.update(|window, cx| {
+            view.update(cx, |app, cx| {
+                assert_eq!(app.marked_text_range(window, cx), Some(5..7), "{key}");
+                app.replace_text_in_range(None, "中文", window, cx);
+            })
+        });
+        assert_eq!(text(&mut window, &view), "draft中文", "{key}");
+        window.simulate_keystrokes(&shortcut("z"));
+        assert_eq!(text(&mut window, &view), "draft", "{key}");
+    }
+}
