@@ -154,6 +154,8 @@ pub struct RenderedLine {
     pub table: Option<TableRow>,
     /// Byte offset of the task checkbox in the physical source line.
     pub task_marker: Option<usize>,
+    /// Source and display byte offsets where a list item's body begins.
+    pub list_content: Option<(usize, usize)>,
 }
 
 impl RenderedLine {
@@ -314,6 +316,7 @@ pub fn project(source: &str, theme: &Theme) -> Vec<RenderedLine> {
             images: Vec::new(),
             table: None,
             task_marker: None,
+            list_content: None,
         })
         .collect();
     // Difference arrays classify nested containers in one final linear pass,
@@ -407,6 +410,14 @@ pub fn project(source: &str, theme: &Theme) -> Vec<RenderedLine> {
                     } else {
                         style.append(&mut lines[row], "• ");
                     }
+                    let raw = &source[range.clone()];
+                    let marker_end = raw.find([' ', '\t']).unwrap_or(raw.len());
+                    let body = marker_end + raw[marker_end..].len()
+                        - raw[marker_end..].trim_start_matches([' ', '\t']).len();
+                    lines[row].list_content = Some((
+                        range.start - starts[row] + body,
+                        lines[row].spans.iter().map(|span| span.text.len()).sum(),
+                    ));
                 }
                 Tag::Emphasis => style.emphasis += 1,
                 Tag::Strong => style.strong += 1,
@@ -510,6 +521,16 @@ pub fn project(source: &str, theme: &Theme) -> Vec<RenderedLine> {
             Event::TaskListMarker(checked) => {
                 lines[row].task_marker = Some(range.start - starts[row]);
                 style.append(&mut lines[row], if checked { "[x] " } else { "[ ] " });
+                if let Some((body_source, display)) = lines[row].list_content.as_mut() {
+                    *body_source = range.end - starts[row];
+                    while matches!(
+                        source.as_bytes().get(starts[row] + *body_source),
+                        Some(b' ' | b'\t')
+                    ) {
+                        *body_source += 1;
+                    }
+                    *display += 4;
+                }
             }
             // Breaks already have distinct physical rows. Adding a space here
             // would change the visual line ending and can leak inline styling.

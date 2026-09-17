@@ -18,33 +18,53 @@ impl HitRow {
         std::iter::once(0)
             .chain(self.wrapped.iter().flat_map(|line| {
                 line.wrap_boundaries.iter().map(|boundary| {
-                    line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index
+                    self.body_start
+                        + line.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix]
+                            .index
                 })
             }))
             .collect()
     }
 
     pub fn position_for_index(&self, index: usize) -> Point<Pixels> {
-        let starts = self.starts();
-        let visual_row = starts
-            .partition_point(|start| *start <= index)
-            .saturating_sub(1);
-        self.origin
-            + point(
-                self.line.x_for_index(index) - self.line.x_for_index(starts[visual_row]),
-                self.line_height * visual_row as f32,
-            )
+        if let Some(wrapped) = &self.wrapped {
+            let layout = &wrapped.unwrapped_layout;
+            let boundary_index = |boundary: &WrapBoundary| {
+                layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index
+            };
+            let visual_row = wrapped
+                .wrap_boundaries
+                .partition_point(|boundary| self.body_start + boundary_index(boundary) <= index);
+            if visual_row > 0 {
+                let start = boundary_index(&wrapped.wrap_boundaries[visual_row - 1]);
+                return self.origin
+                    + point(
+                        self.line.x_for_index(self.body_start)
+                            + layout.x_for_index(index - self.body_start)
+                            - layout.x_for_index(start),
+                        self.line_height * visual_row as f32,
+                    );
+            }
+        }
+        self.origin + point(self.line.x_for_index(index), px(0.))
     }
 
     pub fn index_for_position(&self, position: Point<Pixels>) -> usize {
         if let Some(line) = &self.wrapped {
             let mut local = position - self.origin;
+            let indent = self.line.x_for_index(self.body_start);
+            if local.y < self.line_height && local.x < indent {
+                return self.line.closest_index_for_x(local.x).min(self.body_start);
+            }
+            local.x -= indent;
             local.y = local
                 .y
                 .max(px(0.))
                 .min(self.line_height * (line.wrap_boundaries.len() as f32 + 0.99));
-            line.closest_index_for_position(local, self.line_height)
-                .unwrap_or_else(|index| index)
+            self.body_start
+                + line
+                    .closest_index_for_position(local, self.line_height)
+                    .unwrap_or_else(|index| index)
         } else {
             self.line.closest_index_for_x(position.x - self.origin.x)
         }
@@ -212,23 +232,24 @@ impl Surface {
                             .projection
                             .get(source_row)
                             .is_some_and(|row| row.table.is_none() && row.kind != BlockKind::Code));
-                let wrapped = if wrap && line.width > available {
-                    window
-                        .text_system()
-                        .shape_text(
-                            line.text.clone(),
-                            px(font_size),
-                            &runs,
-                            Some(available),
-                            None,
-                        )
-                        .map(|mut lines| lines.pop())
-                        .unwrap_or_else(|error| {
-                            eprintln!("Wrapping text: {error}");
-                            None
-                        })
+                let body_start = if wrap {
+                    app.projection
+                        .get(source_row)
+                        .and_then(|row| row.list_content)
+                        .map_or(0, |(source, display)| if raw { source } else { display })
+                        .min(line.text.len())
                 } else {
-                    None
+                    0
+                };
+                let (wrapped, body_start) = if wrap {
+                    super::wrap_body(&line, &runs, available, body_start, window).unwrap_or_else(
+                        |error| {
+                            eprintln!("Wrapping text: {error}");
+                            (None, 0)
+                        },
+                    )
+                } else {
+                    (None, 0)
                 };
                 let mut row_height = px(text_line_height)
                     * (wrapped
@@ -270,6 +291,7 @@ impl Surface {
                     line: line.clone(),
                     raw,
                     wrapped: wrapped.clone(),
+                    body_start,
                     line_height: px(text_line_height),
                     height: row_height,
                 };
@@ -316,8 +338,8 @@ impl Surface {
                             let first = range.start.max(start);
                             let last = range.end.min(end);
                             if first < last {
-                                let left = line.x_for_index(first) - line.x_for_index(start);
-                                let right = line.x_for_index(last) - line.x_for_index(start);
+                                let left = hit.position_for_index(first).x - origin.x;
+                                let right = left + line.x_for_index(last) - line.x_for_index(first);
                                 result.quads.push(fill(
                                     Bounds::new(
                                         origin
@@ -430,10 +452,36 @@ impl Surface {
                     height: row_height,
                     ..hit
                 });
+                let mut text_origin = origin;
+                if wrapped.is_some() && body_start > 0 {
+                    let mut remaining = body_start;
+                    let prefix_runs: Vec<_> = runs
+                        .iter()
+                        .filter_map(|run| {
+                            let len = remaining.min(run.len);
+                            remaining -= len;
+                            (len > 0).then(|| TextRun { len, ..run.clone() })
+                        })
+                        .collect();
+                    result.text.push(DrawText {
+                        line: window.text_system().shape_line(
+                            line.text[..body_start].to_owned().into(),
+                            px(font_size),
+                            &prefix_runs,
+                            None,
+                        ),
+                        wrapped: None,
+                        origin,
+                        height: px(text_line_height),
+                        clip: None,
+                        align: TextAlign::Left,
+                    });
+                    text_origin.x += line.x_for_index(body_start);
+                }
                 result.text.push(DrawText {
                     line,
                     wrapped,
-                    origin,
+                    origin: text_origin,
                     height: px(text_line_height),
                     clip: None,
                     align: TextAlign::Left,
