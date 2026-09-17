@@ -487,6 +487,51 @@ impl Default for Config {
                 ("ctrl-s".into(), "save".into()),
                 ("cmd-v".into(), "paste".into()),
                 ("ctrl-shift-v".into(), "paste".into()),
+                (
+                    if cfg!(target_os = "macos") {
+                        "cmd-b"
+                    } else {
+                        "ctrl-b"
+                    }
+                    .into(),
+                    "bold".into(),
+                ),
+                (
+                    if cfg!(target_os = "macos") {
+                        "cmd-i"
+                    } else {
+                        "ctrl-i"
+                    }
+                    .into(),
+                    "italic".into(),
+                ),
+                (
+                    if cfg!(target_os = "macos") {
+                        "cmd-u"
+                    } else {
+                        "ctrl-u"
+                    }
+                    .into(),
+                    "underline".into(),
+                ),
+                (
+                    if cfg!(target_os = "macos") {
+                        "cmd-shift-x"
+                    } else {
+                        "ctrl-shift-x"
+                    }
+                    .into(),
+                    "strikethrough".into(),
+                ),
+                (
+                    if cfg!(target_os = "macos") {
+                        "cmd-shift-c"
+                    } else {
+                        "ctrl-shift-c"
+                    }
+                    .into(),
+                    "inline-code".into(),
+                ),
                 ("cmd-e".into(), "explorer".into()),
                 ("ctrl-e".into(), "explorer".into()),
                 ("cmd-shift-t".into(), "themes".into()),
@@ -694,6 +739,11 @@ impl Config {
                 "open",
                 "save-as",
                 "paste",
+                "bold",
+                "italic",
+                "underline",
+                "strikethrough",
+                "inline-code",
                 "explorer",
                 "terminal",
                 "themes",

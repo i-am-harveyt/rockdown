@@ -1,7 +1,8 @@
 use super::{
-    BufferDelete, EditorPane, ExplorerToggle, HelpToggle, NewDocument, NextBuffer, OpenDocument,
-    OutlineToggle, Pane, Paste, PreviousBuffer, Save, SaveAs, StatusBarToggle, TabBarToggle,
-    TerminalToggle, ThemesToggle, UiMode, UiModeToggle, Workspace,
+    Bold, BufferDelete, EditorPane, ExplorerToggle, HelpToggle, InlineCode, Italic, NewDocument,
+    NextBuffer, OpenDocument, OutlineToggle, Pane, Paste, PreviousBuffer, Save, SaveAs,
+    StatusBarToggle, Strikethrough, TabBarToggle, TerminalToggle, ThemesToggle, UiMode,
+    UiModeToggle, Underline, Workspace,
 };
 use crate::vim::Mode;
 use gpui::{prelude::*, *};
@@ -88,6 +89,21 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &Paste, window, cx| this.run_action("paste", window, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &Bold, window, cx| this.run_action("bold", window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Italic, window, cx| this.run_action("italic", window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &Underline, window, cx| {
+                this.run_action("underline", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Strikethrough, window, cx| {
+                this.run_action("strikethrough", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &InlineCode, window, cx| {
+                this.run_action("inline-code", window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ExplorerToggle, window, cx| {
                 this.run_action("explorer", window, cx)
             }))

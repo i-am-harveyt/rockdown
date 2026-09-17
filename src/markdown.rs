@@ -69,6 +69,7 @@ fn append_highlighted(
                 italic: style.font_style.contains(SyntaxFontStyle::ITALIC),
                 code: true,
                 strike: false,
+                underline: false,
                 link: None,
                 color: Some(format!("#{:06x}", syntax_color(style.foreground, palette))),
             });
@@ -93,6 +94,7 @@ pub struct Span {
     pub italic: bool,
     pub code: bool,
     pub strike: bool,
+    pub underline: bool,
     pub link: Option<String>,
     /// Highlighted foreground color as `#rrggbb`, when a fence names a known
     /// language. `None` keeps the renderer's default styling.
@@ -169,6 +171,7 @@ struct Style {
     strong: usize,
     emphasis: usize,
     strike: usize,
+    underline: usize,
     code: usize,
     header: usize,
     links: Vec<String>,
@@ -187,12 +190,14 @@ impl Style {
         let italic = self.emphasis > 0;
         let code = self.code > 0;
         let strike = self.strike > 0;
+        let underline = self.underline > 0;
         let link = self.links.last();
         if let Some(last) = spans.last_mut()
             && last.bold == bold
             && last.italic == italic
             && last.code == code
             && last.strike == strike
+            && last.underline == underline
             && last.link.as_ref() == link
             && last.color.is_none()
         {
@@ -204,6 +209,7 @@ impl Style {
                 italic,
                 code,
                 strike,
+                underline,
                 link: link.cloned(),
                 color: None,
             });
@@ -215,6 +221,76 @@ impl Style {
 enum Container {
     Quote,
     Item(usize),
+}
+
+/// Recognize only balanced, exact underline tags within one Markdown block.
+/// Code events and all other HTML stay literal; this is not an HTML renderer.
+fn underline_events(source: &str, options: Options) -> Vec<(Event<'_>, Range<usize>, bool)> {
+    let mut events = Vec::new();
+    let mut replaced_html = false;
+    for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
+        if replaced_html {
+            if matches!(event, Event::End(TagEnd::HtmlBlock)) {
+                replaced_html = false;
+            }
+            continue;
+        }
+        if matches!(event, Event::Start(Tag::HtmlBlock))
+            && source[range.clone()].trim_start().starts_with("<u>")
+        {
+            // A standalone <u> at line start is classified as block HTML.
+            // A plain prefix forces inline parsing without changing the actual
+            // source offsets or enabling arbitrary HTML rendering.
+            let inline = format!("x{}", &source[range.clone()]);
+            for (mut event, local) in Parser::new_ext(&inline, options).into_offset_iter() {
+                if let Event::Text(text) = &mut event
+                    && local.start == 0
+                {
+                    *text = text.strip_prefix('x').unwrap_or(text).to_owned().into();
+                }
+                if local.end <= 1 {
+                    continue;
+                }
+                let start = range.start + local.start.saturating_sub(1);
+                let end = range.start + local.end - 1;
+                events.push((event.into_static(), start..end, false));
+            }
+            replaced_html = true;
+        } else {
+            events.push((event, range, false));
+        }
+    }
+    let mut openings = Vec::new();
+    for index in 0..events.len() {
+        match &events[index].0 {
+            Event::InlineHtml(tag) if tag.as_ref() == "<u>" => openings.push(index),
+            Event::InlineHtml(tag) if tag.as_ref() == "</u>" => {
+                if let Some(opening) = openings.pop() {
+                    events[opening].2 = true;
+                    events[index].2 = true;
+                }
+            }
+            Event::Start(
+                Tag::Paragraph
+                | Tag::Heading { .. }
+                | Tag::CodeBlock(_)
+                | Tag::HtmlBlock
+                | Tag::Item
+                | Tag::TableCell,
+            )
+            | Event::End(
+                TagEnd::Paragraph
+                | TagEnd::Heading(_)
+                | TagEnd::CodeBlock
+                | TagEnd::HtmlBlock
+                | TagEnd::Item
+                | TagEnd::TableCell,
+            )
+            | Event::Rule => openings.clear(),
+            _ => {}
+        }
+    }
+    events
 }
 
 /// Project a single full-document parse onto physical source lines. Delimiter-only
@@ -255,7 +331,17 @@ pub fn project(source: &str, theme: &Theme) -> Vec<RenderedLine> {
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
 
-    for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
+    // Most documents need neither lookahead nor an event buffer.
+    let underlined = source
+        .contains("<u>")
+        .then(|| underline_events(source, options));
+    let ordinary = underlined
+        .is_none()
+        .then(|| Parser::new_ext(source, options).into_offset_iter())
+        .into_iter()
+        .flatten()
+        .map(|(event, range)| (event, range, false));
+    for (event, range, underline_tag) in ordinary.chain(underlined.into_iter().flatten()) {
         let row = source_row(&starts, range.start);
         let mapped_rows = match &event {
             Event::Text(_)
@@ -394,6 +480,13 @@ pub fn project(source: &str, theme: &Theme) -> Vec<RenderedLine> {
                 TagEnd::TableRow => table_row = None,
                 _ => {}
             },
+            Event::InlineHtml(tag) if underline_tag => {
+                if tag.as_ref() == "<u>" {
+                    style.underline += 1;
+                } else {
+                    style.underline -= 1;
+                }
+            }
             Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
                 if let Some(highlighter) = code_highlighter.as_mut() {
                     append_highlighted(&mut lines, row, &text, highlighter, &palette);
@@ -681,6 +774,101 @@ mod tests {
             .iter()
             .map(|cell| cell.iter().map(|span| span.text.as_str()).collect())
             .collect()
+    }
+
+    #[test]
+    fn underline_nests_and_combines_with_markdown_styles() {
+        let lines = project(
+            "<u>outer <u>**世界**</u> *italic* ~~strike~~ [link](target) `code`</u> plain",
+            &Theme::default(),
+        );
+        assert_eq!(text(&lines[0]), "outer 世界 italic strike link code plain");
+        for (fragment, check) in [
+            ("世界", (true, false, false, false)),
+            ("italic", (false, true, false, false)),
+            ("strike", (false, false, true, false)),
+            ("code", (false, false, false, true)),
+        ] {
+            let span = lines[0]
+                .spans
+                .iter()
+                .find(|span| span.text == fragment)
+                .unwrap();
+            assert!(span.underline);
+            assert_eq!((span.bold, span.italic, span.strike, span.code), check);
+        }
+        let link = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.text == "link")
+            .unwrap();
+        assert!(link.underline);
+        assert_eq!(link.link.as_deref(), Some("target"));
+        assert!(!lines[0].spans.last().unwrap().underline);
+        assert_eq!(
+            lines[0].source_column("outer ".len()),
+            "<u>outer <u>**".len()
+        );
+    }
+
+    #[test]
+    fn underline_at_block_start_preserves_physical_rows() {
+        let source = "<u>\n**first**\n<u>second</u>\n</u>\n\nplain";
+        let lines = project(source, &Theme::default());
+        assert_eq!(text(&lines[0]), "");
+        assert_eq!(text(&lines[1]), "first");
+        assert!(lines[1].spans[0].bold && lines[1].spans[0].underline);
+        assert_eq!(text(&lines[2]), "second");
+        assert!(lines[2].spans[0].underline);
+        assert_eq!(lines[2].source_column(0), 3);
+        assert_eq!(text(&lines[3]), "");
+        assert_eq!(text(&lines[5]), "plain");
+        assert!(!lines[5].spans[0].underline);
+    }
+
+    #[test]
+    fn underline_does_not_consume_tags_in_code_or_escape_blocks() {
+        let lines = project(
+            "`<u>literal</u>` <u>yes `</u>` still</u>\n\n```\n<u>fenced</u>\n```\n\n<u>unclosed\n\nplain</u>",
+            &Theme::default(),
+        );
+        assert_eq!(text(&lines[0]), "<u>literal</u> yes </u> still");
+        assert!(!lines[0].spans[0].underline);
+        let closing = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.text == "</u>")
+            .unwrap();
+        assert!(closing.code && closing.underline);
+        assert_eq!(text(&lines[3]), "<u>fenced</u>");
+        assert!(lines[3].spans.iter().all(|span| !span.underline));
+        assert_eq!(text(&lines[6]), "<u>unclosed");
+        assert_eq!(text(&lines[8]), "plain</u>");
+        assert!(
+            lines[6..]
+                .iter()
+                .flat_map(|line| &line.spans)
+                .all(|span| !span.underline)
+        );
+    }
+
+    #[test]
+    fn underline_keeps_unsupported_html_and_escaped_tags_literal() {
+        let source = "<div>\n<u>not interpreted</u>\n</div>\n\nbefore <span>literal</span> <u class=\"x\">unsupported</u> &lt;u&gt;escaped&lt;/u&gt; \\<u>escaped\\</u>";
+        let lines = project(source, &Theme::default());
+        assert_eq!(text(&lines[0]), "<div>");
+        assert_eq!(text(&lines[1]), "<u>not interpreted</u>");
+        assert_eq!(text(&lines[2]), "</div>");
+        assert_eq!(
+            text(&lines[4]),
+            "before <span>literal</span> <u class=\"x\">unsupported</u> <u>escaped</u> <u>escaped</u>"
+        );
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .all(|span| !span.underline)
+        );
     }
 
     #[test]

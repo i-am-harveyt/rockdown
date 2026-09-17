@@ -69,10 +69,10 @@ impl SpanStyle {
             } else if span.code {
                 style.background_color = Some(self.panel);
             }
-            if span.link.is_some() {
+            if span.link.is_some() || span.underline {
                 style.underline = Some(UnderlineStyle {
                     thickness: px(1.),
-                    color: Some(self.link),
+                    color: Some(style.color),
                     wavy: false,
                 });
             }
