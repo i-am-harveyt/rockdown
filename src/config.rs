@@ -476,7 +476,7 @@ impl Default for Config {
                 .unwrap_or_else(|| if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }.into()),
             theme: Theme::default(),
             markdown: MarkdownStyle::default(),
-            keys: BTreeMap::from([
+            keys: [
                 ("cmd-n".into(), "new".into()),
                 ("ctrl-n".into(), "new".into()),
                 ("cmd-o".into(), "open".into()),
@@ -487,6 +487,24 @@ impl Default for Config {
                 ("ctrl-s".into(), "save".into()),
                 ("cmd-v".into(), "paste".into()),
                 ("ctrl-shift-v".into(), "paste".into()),
+                (
+                    if cfg!(target_os = "macos") {
+                        "cmd-z"
+                    } else {
+                        "ctrl-z"
+                    }
+                    .into(),
+                    "undo".into(),
+                ),
+                (
+                    if cfg!(target_os = "macos") {
+                        "cmd-shift-z"
+                    } else {
+                        "ctrl-shift-z"
+                    }
+                    .into(),
+                    "redo".into(),
+                ),
                 (
                     if cfg!(target_os = "macos") {
                         "cmd-b"
@@ -552,7 +570,10 @@ impl Default for Config {
                 ("cmd-w".into(), "buffer-delete".into()),
                 ("ctrl-shift-w".into(), "buffer-delete".into()),
                 ("f1".into(), "help".into()),
-            ]),
+            ]
+            .into_iter()
+            .chain((!cfg!(target_os = "macos")).then(|| ("ctrl-y".into(), "redo".into())))
+            .collect(),
         }
     }
 }
@@ -739,6 +760,8 @@ impl Config {
                 "open",
                 "save-as",
                 "paste",
+                "undo",
+                "redo",
                 "bold",
                 "italic",
                 "underline",

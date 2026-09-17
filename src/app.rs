@@ -35,6 +35,8 @@ actions!(
         OpenDocument,
         SaveAs,
         Paste,
+        Undo,
+        Redo,
         Bold,
         Italic,
         Underline,
@@ -59,13 +61,18 @@ actions!(
 /// the app even when macOS routes a key equivalent (like Cmd-V) through the
 /// input context instead of delivering a plain key-down event.
 pub fn bind_config_keys(config: &Config, cx: &mut App) {
+    let history_context =
+        std::rc::Rc::new(KeyBindingContextPredicate::parse("BufferHistory").unwrap());
     cx.bind_keys(config.keys.iter().filter_map(|(key, action)| {
+        let context = matches!(action.as_str(), "undo" | "redo").then(|| history_context.clone());
         let action: Box<dyn Action> = match action.as_str() {
             "save" => Box::new(Save),
             "new" => Box::new(NewDocument),
             "open" => Box::new(OpenDocument),
             "save-as" => Box::new(SaveAs),
             "paste" => Box::new(Paste),
+            "undo" => Box::new(Undo),
+            "redo" => Box::new(Redo),
             "bold" => Box::new(Bold),
             "italic" => Box::new(Italic),
             "underline" => Box::new(Underline),
@@ -85,7 +92,7 @@ pub fn bind_config_keys(config: &Config, cx: &mut App) {
             "buffer-delete" => Box::new(BufferDelete),
             _ => return None,
         };
-        KeyBinding::load(key, action, None, false, None, &DummyKeyboardMapper).ok()
+        KeyBinding::load(key, action, context, false, None, &DummyKeyboardMapper).ok()
     }));
 }
 

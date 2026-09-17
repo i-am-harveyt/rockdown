@@ -174,6 +174,26 @@ Tool shortcuts remain available while controls are hidden. Commands, searches, a
 still appear as floating feedback without resizing the page, so errors are not lost.
 Themes have **no button in either mode**; use **Cmd/Ctrl-Shift-T** or `:theme`.
 
+### Undo and redo
+
+| Action | macOS | Windows / Linux |
+| --- | --- | --- |
+| Undo | `Cmd-Z` | `Ctrl-Z` |
+| Redo | `Cmd-Shift-Z` | `Ctrl-Shift-Z` or `Ctrl-Y` |
+
+These shortcuts share history with Vim `u` / `Ctrl-R` and work in Markdown,
+plain-text documents, and staged Files edits. They affect only the focused
+buffer; undoing Files edits does not reverse filesystem changes already saved.
+In Insert mode, undo finishes the current typing transaction and leaves you
+in Insert mode. Redo restores the insertion caret, including at the end of a
+line. Typing after an undo starts a new transaction and discards the redo branch.
+Visual selections are cleared when using undo or redo.
+
+History shortcuts are inactive in Terminal, command/search input, IME
+composition, and open pickers/dialogs. Terminal control keys remain available
+to the shell. Reassign the `undo` and `redo` actions in `[keys]`; an explicit
+key map replaces all defaults.
+
 ## Markdown editing
 
 ### Format selected text
@@ -627,6 +647,8 @@ new
 open
 save-as
 paste
+undo
+redo
 bold
 italic
 underline

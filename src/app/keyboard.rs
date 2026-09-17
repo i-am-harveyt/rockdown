@@ -53,6 +53,11 @@ impl Workspace {
             self.request_window_close(window, cx);
             return Ok(true);
         }
+        // Composition belongs to the native input handler. Unbound control keys
+        // must not reach Vim or discard the range the IME will replace on commit.
+        if self.marked.is_some() && self.pane != Pane::Terminal {
+            return Ok(false);
+        }
         if let Some(selected) = self.ui_mode_picker {
             match key {
                 "escape" => self.ui_mode_picker = None,

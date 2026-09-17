@@ -356,6 +356,10 @@ pub(super) const HELP: &[HelpSection] = &[
             ),
             ("u / Ctrl-R", "Undo / redo"),
             (
+                "Cmd/Ctrl-Z · Cmd/Ctrl-Shift-Z",
+                "Undo / redo; retain Insert mode while typing",
+            ),
+            (
                 "Return",
                 "Split a line in Insert mode; open a line below in Normal mode",
             ),
@@ -367,6 +371,8 @@ pub(super) const HELP: &[HelpSection] = &[
         notes: &[
             "Counts combine with motions and operators: 3j moves three lines; 2dd deletes two; 3>> indents three.",
             "Editor and Files share the system clipboard. Ctrl-C/V (Cmd-C/V on macOS) copies/pastes; Ctrl-Shift-V pastes in every pane. Yanks, deletes, and changes copy text; linewise yanks paste as whole lines. Visual p/P replaces the selection.",
+            "Undo/redo shortcuts share Vim history and affect the focused document or staged Files buffer, not saved filesystem operations. Windows/Linux also support Ctrl-Y. Visual selections clear; typing after undo discards redo. Rebind undo/redo in [keys].",
+            "History shortcuts leave Terminal control keys alone and do not edit behind command/search input, IME composition, or open dialogs/pickers.",
         ],
     },
     HelpSection {

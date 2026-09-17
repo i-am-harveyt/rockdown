@@ -142,6 +142,23 @@ impl Workspace {
             )?,
             "buffer-delete" => self.close_tab(self.documents.active_id(), window, cx),
             "paste" => self.paste_clipboard(window, cx),
+            "undo" | "redo" => {
+                if !self.buffer_history_available() {
+                    return Ok(());
+                }
+                let buffer = self.buffer_mut();
+                if action == "undo" {
+                    buffer.undo();
+                } else {
+                    buffer.redo();
+                }
+                self.preferred_visual_x = None;
+                self.viewport_alignment = None;
+                self.follow_cursor = true;
+                if self.pane == Pane::Editor {
+                    self.refresh_projection();
+                }
+            }
             "bold" => self.format_selection(InlineFormat::Bold),
             "italic" => self.format_selection(InlineFormat::Italic),
             "underline" => self.format_selection(InlineFormat::Underline),
@@ -152,6 +169,18 @@ impl Workspace {
         self.focus.focus(window);
         cx.notify();
         Ok(())
+    }
+
+    pub(super) fn buffer_history_available(&self) -> bool {
+        self.pane != Pane::Terminal
+            && self.command.is_none()
+            && self.marked.is_none()
+            && !self.dialog_pending
+            && !self.help
+            && self.theme_picker.is_none()
+            && self.outline_picker.is_none()
+            && self.ui_mode_picker.is_none()
+            && !self.writer_tabs_open
     }
 
     fn format_selection(&mut self, format: InlineFormat) {
