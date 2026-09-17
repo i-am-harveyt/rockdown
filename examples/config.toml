@@ -75,7 +75,10 @@ thickness = 1.5
 # Specifying keys replaces the default shortcut map.
 # Supported actions: new, open, save, save-as, paste (clipboard), explorer (toggle),
 # terminal, editor, help, themes, ui-mode, outline, buffer-delete, previous-buffer, next-buffer.
-# tab-bar, status-bar.
+# tab-bar, status-bar, bold, italic, underline, strikethrough, inline-code.
+# Formatting requires a Markdown selection; repeated use toggles it off.
+# Each nonempty selected physical line is formatted separately; one undo restores all.
+# Underline writes <u> HTML tags, which other Markdown renderers may strip or ignore.
 [keys]
 cmd-n = "new"
 ctrl-n = "new"
@@ -107,3 +110,12 @@ cmd-alt-t = "tab-bar"
 ctrl-alt-t = "tab-bar"
 cmd-alt-s = "status-bar"
 ctrl-alt-s = "status-bar"
+
+# Formatting defaults use Cmd on macOS, Ctrl on Linux/Windows.
+# These are the macOS bindings; replace cmd with ctrl on Linux/Windows.
+# In particular, ctrl-u overrides Vim half-page-up; remap underline to keep that key.
+cmd-b = "bold"
+cmd-i = "italic"
+cmd-u = "underline"
+cmd-shift-x = "strikethrough"
+cmd-shift-c = "inline-code"

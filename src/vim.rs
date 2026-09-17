@@ -4,6 +4,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 mod clipboard;
 mod editing;
+mod formatting;
 mod history;
 mod keys;
 mod motions;
@@ -13,6 +14,8 @@ mod substitution;
 
 #[cfg(test)]
 mod tests;
+
+pub use formatting::InlineFormat;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {

@@ -396,6 +396,7 @@ pub(super) const HELP: &[HelpSection] = &[
         notes: &[
             "Click to place the caret, double-click to select a word, or drag to select text. The mouse wheel scrolls. Wrapped prose stays editable; Insert-mode Up/Down follows visual rows.",
             "A count before Ctrl-D/U sets the number of lines for later half-page motions. A count before zz/zt first selects that line, for example 40zz.",
+            "On Linux/Windows, the default Ctrl-U shortcut formats selected Markdown as underline instead of moving half a page. Remap or omit underline in [keys] to restore that Vim key; macOS uses Cmd-U.",
         ],
     },
     HelpSection {
@@ -433,6 +434,11 @@ pub(super) const HELP: &[HelpSection] = &[
         title: "Markdown",
         summary: "Plain text while you write. Rich preview when you move on.",
         shortcuts: &[
+            ("Cmd/Ctrl-B", "Toggle bold on selected text"),
+            ("Cmd/Ctrl-I", "Toggle italic on selected text"),
+            ("Cmd/Ctrl-U", "Toggle underline on selected text"),
+            ("Cmd/Ctrl-Shift-X", "Toggle strikethrough on selected text"),
+            ("Cmd/Ctrl-Shift-C", "Toggle inline code on selected text"),
             (
                 "Return",
                 "Continue the current list, task, or quote in Insert mode",
@@ -449,6 +455,10 @@ pub(super) const HELP: &[HelpSection] = &[
             ),
         ],
         notes: &[
+            "Formatting uses Cmd on macOS and Ctrl elsewhere. Select with v/V, a mouse drag, or a double-click; without a selection, formatting does nothing. Shortcuts can be changed with bold, italic, underline, strikethrough, and inline-code in [keys].",
+            "Selection and direction are retained. Nonempty selected physical lines are formatted separately, excluding surrounding whitespace. Esc then u undoes the whole operation; Ctrl-R redoes it.",
+            "Formatting is Markdown-editor only. It does not edit Files, Terminal, plain text, command/search input, IME composition, or open dialogs/pickers. Selections touching fenced or indented code blocks are left unchanged.",
+            "Underline writes <u>text</u>, since Markdown has no standard underline syntax. Rockdown previews this limited tag, but other renderers may strip or ignore it; arbitrary HTML is not rendered.",
             "Live preview applies to .md files (case-insensitive) and untitled buffers. Inactive lines render; the cursor line exposes editable syntax. Other files remain literal text. Save As updates the preview type.",
             "Prose wraps automatically. Local images default to 60% of the pane width; remote images remain linked alt text without network requests.",
             "Paste PNG/JPEG/GIF/WebP images with Cmd-V or Ctrl-Shift-V, or drop image files into the editor. Untitled documents ask for Save As first; assets are copied beside the document using image_assets_dir (default assets).",

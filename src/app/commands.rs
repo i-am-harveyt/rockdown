@@ -1,5 +1,5 @@
 use super::{Pane, UiMode, Workspace, bind_config_keys};
-use crate::{config::Config, explorer::Explorer};
+use crate::{config::Config, explorer::Explorer, markdown::BlockKind, vim::InlineFormat};
 use anyhow::{Result, bail};
 use gpui::*;
 use std::path::Path;
@@ -142,11 +142,39 @@ impl Workspace {
             )?,
             "buffer-delete" => self.close_tab(self.documents.active_id(), window, cx),
             "paste" => self.paste_clipboard(window, cx),
+            "bold" => self.format_selection(InlineFormat::Bold),
+            "italic" => self.format_selection(InlineFormat::Italic),
+            "underline" => self.format_selection(InlineFormat::Underline),
+            "strikethrough" => self.format_selection(InlineFormat::Strikethrough),
+            "inline-code" => self.format_selection(InlineFormat::Code),
             _ => {}
         }
         self.focus.focus(window);
         cx.notify();
         Ok(())
+    }
+
+    fn format_selection(&mut self, format: InlineFormat) {
+        if self.pane != Pane::Editor
+            || !self.documents.current().is_markdown()
+            || self.command.is_some()
+            || self.marked.is_some()
+            || self.dialog_pending
+        {
+            return;
+        }
+        let buffer = self.buffer();
+        if self.projection.iter().any(|line| {
+            line.kind == BlockKind::Code && buffer.selected_range(line.source_row).is_some()
+        }) {
+            return;
+        }
+        if self.buffer_mut().toggle_inline_format(format) {
+            self.preferred_visual_x = None;
+            self.viewport_alignment = None;
+            self.follow_cursor = true;
+            self.refresh_projection();
+        }
     }
     pub(super) fn find_next(&mut self, first: bool) {
         if self.search.is_empty() {
