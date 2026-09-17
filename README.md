@@ -1,732 +1,141 @@
 # Rockdown
 
-A lightweight, native Markdown editor built with **Rust and GPUI**. Write in plain Markdown with in-place preview and Vim-style editing. A file drawer and terminal are available when needed, without a browser or Electron runtime.
+A lightweight, native Markdown editor built with **Rust and GPUI**. Write in plain Markdown with in-place preview and Vim-style editing—without a browser or Electron runtime.
 
-## What it does
+## Features
 
-- **Focused writing layout:** a centered Markdown column with generous vertical spacing, optional line numbers, and softly outlined document tabs with full paths on hover. Native UI typography separates the window controls, file-drawer headings, and status bar from the configurable editor font. Subtle theme-derived dividers and a tinted Vim-mode badge keep the chrome quiet. Opening a named file starts with Files hidden; opening a directory keeps Files visible.
-- **Live-preview Markdown:** headings, emphasis, code, lists, task lists, tables, quotes, wrapped prose, and local images.
-- **Vim-style editing:** Normal, Insert, and Visual modes; motions, counts, operators, search, and undo/redo.
-- **Multiple buffers:** switch between documents without losing unsaved text, cursor position, viewport, or undo history.
-- **Local recovery:** private crash-recovery checkpoints preserve unsaved drafts; reopening the same session restores tabs, the active document, cursor, and viewport without automatically saving Markdown files.
-- **Right-hand file explorer:** rename, create, and stage deletions by editing filenames as buffer lines. Hide the dock or drag its left edge to resize it.
-- **Embedded terminal:** a real PTY shell with color support, keyboard input, and resizing.
-- **TOML configuration:** customize fonts, colors, dock dimensions, shell, and shortcuts.
+- **Live Markdown preview:** headings, emphasis, code, lists, tasks, tables, quotes, and local images. The active line shows its source syntax; other lines render in place.
+- **Vim-style editing:** Normal, Insert, and Visual modes, motions, operators, search, and undo/redo. A focused subset, not a full Vim implementation.
+- **Multiple documents:** tabs preserve unsaved text and editing history; local recovery restores drafts after a crash.
+- **Dev and Writer layouts:** a docked workspace or a distraction-free writing view with floating controls.
+- **Files and terminal:** edit filenames to stage filesystem operations, or open an embedded shell.
+- **TOML configuration:** customize typography, themes, layout, and shortcuts.
 
-Rockdown uses **line-based live preview** for `.md` files (case-insensitive) and untitled buffers: inactive lines render as Markdown, while the active line exposes its source syntax for editing. All other named files—including TOML, code, and extensionless files—show literal plain text, without Markdown styling, tables, or image previews. Preview mode follows save-as and explorer renames. Files remain plain UTF-8 text on disk.
+Preview applies to `.md` files and untitled documents. Other files open as plain text. All documents remain UTF-8 text on disk.
 
-Markdown uses a maximum column width of 820 logical pixels, shrinking to fit smaller windows. Set `writing_width` (320–1600) and `markdown_line_numbers = true` in your TOML configuration to adjust the layout. Plain-text documents retain full-width editing and line numbers. A dot beside a tab name indicates unsaved changes. Toggle Files with Ctrl-E (Cmd-E on macOS) and the terminal with Ctrl-`; F1 opens the keyboard guide.
+## Install and run
 
-Hide chrome independently without changing the rest of the layout:
+**Platform status:** native UI verified on macOS Apple Silicon. CI and automated release archives currently cover Windows x64 only; native Windows UI and Linux builds remain unverified.
 
-| Control | macOS | Windows / Linux | Command |
-|---|---|---|---|
-| Toggle tab bar | `Cmd-Alt-T` | `Ctrl-Alt-T` | `:tabbar` |
-| Toggle status bar | `Cmd-Alt-S` | `Ctrl-Alt-S` | `:statusbar` |
+### Windows release
 
-You can also open **F1 → Appearance** and click **Tab bar** or **Status bar**.
-Both bars are shown by default. Toggles apply to the current session; set
-`tab_bar_visible = false` and/or `status_bar_visible = false` at the top level of
-your TOML config to start with them hidden. `:config` restores the configured
-visibility. Hiding tabs does not close documents; buffer shortcuts still work.
-When the status bar is hidden, command/search input and operation messages
-appear in a compact feedback row. Notifications automatically disappear after
-five seconds; a new notification restarts the timer, even if its text is identical.
-Click **×** to dismiss one sooner. Command/search input never expires, and the
-status bar stays hidden. F1 and the theme, outline, Files, and terminal shortcuts
-remain available.
-
-## Build and run
-
-### Requirements
-
-- A recent Rust toolchain with Cargo and Rust 2024 edition support.
-- Native development tools required by GPUI and its dependencies.
-- On macOS, Xcode Command Line Tools. Install them with `xcode-select --install` if needed.
-- On Windows, Windows 10 version 1809 or newer (or Windows 11), the Rust MSVC toolchain, and Visual Studio Build Tools with **Desktop development with C++** and a Windows 10/11 SDK. The SDK provides GPUI's `fxc.exe` shader compiler.
-
-**Platform status:** development and native-window verification have been performed on macOS Apple Silicon. Windows support uses GPUI's native backend, ConPTY for the embedded terminal, and Windows filesystem operations for explorer commits. CI tests and builds Windows x64 only, and automated releases publish only the Windows x64 archive. macOS builds remain available locally, including app packaging with `scripts/bundle-macos.sh`; macOS CI and automated releases are disabled. Native Windows UI behavior has not been verified on this development machine. Linux builds and UI behavior also remain unverified here and may require additional GPUI system dependencies and an installed monospace font.
-
-The macOS build enables GPUI's runtime shader compilation, so a separate Xcode Metal compiler toolchain is not required.
-
-Release builds optimize for size (`opt-level = "s"`) with full link-time optimization, one codegen unit, and stripped symbols. Full LTO can increase build time; panic unwinding remains enabled. Markdown and syntax-highlighting dependencies enable only the features needed by the editor, retaining bundled grammars and themes.
-
-From the repository root:
-
-```sh
-cargo build --release --locked
-
-# Open a directory with an untitled editor buffer.
-./target/release/rockdown /path/to/notes
-
-# Open a document.
-./target/release/rockdown /path/to/notes/note.md
-
-# Open several documents; missing files become named buffers.
-./target/release/rockdown README.md test.md
-
-# Use the current directory.
-./target/release/rockdown
-```
-
-You can also build and launch in one command:
-
-```sh
-cargo run --release -- /path/to/notes
-```
-
-Passing nonexistent filenames starts empty buffers at those paths, provided their parent directories exist. Files are created only when you save them. Multiple files open in argument order with the first file active; repeated paths reuse the same buffer. A directory must be the only positional path. Use `--` before filenames that begin with a dash.
-
-### Windows quick start
-
-Extract the Windows release archive, then launch `rockdown.exe`, or run it from PowerShell with a file or notes directory:
+Extract the Windows release archive and launch `rockdown.exe`, or open a file or existing notes directory from PowerShell:
 
 ```powershell
 .\rockdown.exe "$HOME\Documents\Notes"
 ```
 
-To build from source, open **Developer PowerShell for Visual Studio** in the repository root:
+### Build from source
+
+Requires a Rust toolchain with **Rust 2024 edition** support and native development tools:
+
+- **macOS:** install Xcode Command Line Tools with `xcode-select --install`. A separate Metal compiler toolchain is not required.
+- **Windows:** Windows 10 version 1809 or newer, the Rust MSVC toolchain, and Visual Studio Build Tools with **Desktop development with C++** and a Windows SDK.
+- **Linux:** additional GPUI system dependencies and an installed monospace font may be needed.
+
+From the repository root:
+
+```sh
+cargo build --release --locked
+
+./target/release/rockdown                     # Current directory
+./target/release/rockdown /path/to/notes       # Notes directory
+./target/release/rockdown note.md draft.md    # One or more documents
+```
+
+Missing files become empty buffers and are created when saved; their parent directories must exist. A directory must be the only positional path.
+
+On Windows, build in **Developer PowerShell for Visual Studio**:
 
 ```powershell
 rustup default stable-x86_64-pc-windows-msvc
-# Select the shader compiler from the SDK initialized by Developer PowerShell.
 $env:GPUI_FXC_PATH = Join-Path $env:WindowsSdkVerBinPath 'x64\fxc.exe'
 cargo build --release --locked
-.\target\release\rockdown.exe "$HOME\Documents\Notes"
+.\target\release\rockdown.exe
 ```
 
-If `WindowsSdkVerBinPath` is unavailable, set `GPUI_FXC_PATH` to the installed SDK's `fxc.exe`, usually under `C:\Program Files (x86)\Windows Kits\10\bin\<SDK version>\x64\`. No Unix shell or WSL is required. Use a directory that already exists.
+If `WindowsSdkVerBinPath` is unavailable, set `GPUI_FXC_PATH` to your installed SDK's `fxc.exe`. macOS app packaging is available through [`scripts/bundle-macos.sh`](scripts/bundle-macos.sh).
 
-Windows defaults to **Consolas**, reads settings from `%APPDATA%\rockdown\config.toml`, and starts `%COMSPEC%` (normally Command Prompt) in the terminal. To use PowerShell, set `shell = 'powershell.exe'` or `shell = 'C:\Program Files\PowerShell\7\pwsh.exe'` in your TOML config. Single-quoted TOML strings keep Windows backslashes literal. The shell setting accepts an executable path, not arguments.
+## Getting started
 
-Use **Ctrl-C / Ctrl-V** for clipboard operations in the editor and explorer, and **Ctrl-Shift-V** to paste in the terminal. Terminal **Ctrl-C** remains an interrupt. Type `exit` to close Command Prompt or PowerShell.
+1. Open your notes directory or a Markdown file.
+2. The editor starts in **Normal mode**. Press `i` to enter Insert mode and type; press `Esc` to return to Normal mode.
+3. Press **Cmd-S / Ctrl-S** to save. Untitled documents prompt for a filename.
+4. Press **F1** or enter `:help` for the in-app keyboard and command reference.
 
-### Command-line options
+### Essential shortcuts
 
-```text
-rockdown [FILE|DIRECTORY] [--config PATH] [--check-config]
-```
-
-| Option | Purpose |
-| --- | --- |
-| `--config PATH` | Load an explicitly selected `.toml` configuration. |
-| `--check-config` | Validate configuration and exit without opening a window. |
-| `--help`, `-h` | Print usage information. |
-
-## First note in one minute
-
-1. Launch Rockdown in your notes directory.
-2. The editor starts in **Normal mode**. Press `i` to enter **Insert mode** and start typing.
-3. Press Return to insert a newline. Press `Esc` to return to Normal mode.
-4. Press `Cmd-S` / `Ctrl-S` and choose a filename to save your note.
-5. Press `Ctrl-W`, then `l`, to focus the file explorer. Select a file with `j` or `k` and press Return to open it.
-6. Use the buffer tabs or `Ctrl-PageUp` / `Ctrl-PageDown` to switch documents.
-
-Press **F1** or enter `:help` for the in-app reference. Browse Editing, Navigation, Documents, Markdown, Files & terminal, and Appearance with the topic tabs or **Left/Right/Tab**. Shortcut rows and notes scroll independently beneath a fixed header. Press **Esc**, click **×**, or click outside to dismiss; the document remains protected from edits while the guide is open.
-
-## Focus and global shortcuts
-
-`Cmd` refers to the macOS Command key. For sequences such as `Ctrl-W h`, press `Ctrl-W`, release it, then press `h`.
+`Cmd/Ctrl` means Cmd on macOS and Ctrl on Windows/Linux. For sequences such as `Ctrl-W h`, press `Ctrl-W`, release it, then press `h`.
 
 | Shortcut | Action |
 | --- | --- |
-| `Cmd-S` / `Ctrl-S` | Save the focused editor buffer, or commit explorer changes when the explorer is focused. |
-| `Ctrl-E` / `Cmd-E` | Hide or show the file explorer. Showing it also focuses it. |
-| `Ctrl-W h` | Focus the editor. |
-| `Ctrl-W l` | Reveal and focus the explorer without toggling it closed. |
-| `Ctrl-W j` | Reveal and focus the terminal. |
-| `Cmd-1` / `Ctrl-1` | Focus the editor. |
-| `Ctrl-Shift-V` | Paste from the clipboard in any pane. |
-| Ctrl + backtick | Toggle the terminal dock. |
-| `Ctrl-PageUp` / `Ctrl-PageDown` | Previous / next editor buffer. |
-| `Cmd-W` / `Ctrl-Shift-W` | Close the current editor buffer, prompting to Save / Discard / Cancel if needed. |
-| `F1` | Toggle the keyboard guide. |
-| `Cmd-Shift-O` / `Ctrl-Shift-O` | Toggle the searchable document outline. |
-| `Cmd-Shift-M` / `Ctrl-Shift-M` | Open the Dev / Writer mode selector. |
-
-Click a pane to focus it. In Markdown, clicks place the caret near the clicked text and preserve Insert mode; dragging or double-clicking a word creates a Vim Visual selection. Active prose stays wrapped, and Insert-mode Up/Down move between visual rows. In **Dev Mode**, footer controls toggle Outline, Files, and Help; an open terminal also has a Hide Terminal control. Hover for a tooltip identifying the action; icons stay highlighted while their dock or guide is open. Footer buttons, buffer tabs, and tab-close controls have distinct hover and pressed highlights. The macOS title bar centers **Rockdown — {buffer name}** and updates when you switch or save a buffer under a new name.
-
-Wrapped bullet, numbered, and task-list items use hanging indentation: continuation rows align with the first row's body text, in both preview and editing mode.
-
-### Dev and Writer modes
-
-Use the **Dev / Writer** control at the top-right, **Cmd/Ctrl-Shift-M**, or `:uimode`.
-Select a mode with the mouse or **↑/↓** (also **j/k**), then **Enter**; **Esc** or
-clicking outside closes the selector. The mode is session-only and starts in **Dev**.
-
-- **Dev** retains the docked workspace, tab bar, status bar, and existing visibility settings.
-- **Writer** hides fixed bars and panels. Translucent, rounded floating controls replace them:
-  - Bottom-left Vim indicator shows **N**, **I**, or **V**. Hover to see the full mode, such as **Vim Mode: Normal** or **Vim Mode: Visual Line**; the Dev status-bar indicator provides the same tooltip.
-  - **Tabs**, immediately to its right, opens a scrollable vertical document list above it.
-    Click a document to switch, use its × to close it, or dismiss the popup with **Esc** / an outside click.
-  - **Hide** hides the floating controls and closes open tools; **Show** restores the controls.
-  - Bottom-right **Outline / Files / Help** group opens dismissible windows with aligned bottom edges.
-  - Files retains Vim editing, staged changes, navigation, and `:w` commits.
-    **Esc** in Files Normal mode dismisses it; in Insert mode, the first Esc returns to Normal.
-  - The terminal shortcut still works, opening a floating terminal (**T** indicator).
-    Close it with its × control or **Ctrl-backtick**.
-
-Switching modes preserves document edits and staged Files changes. Returning to Dev
-restores its prior Files/Terminal visibility without restarting the shell.
-Writer's editor fills the window behind its floating controls without reserved top/bottom bands.
-The mode control keeps the same size and position in both modes.
-In Writer, **Cmd/Ctrl-Alt-T** / `:tabbar` toggles the Tabs popup, and
-**Cmd/Ctrl-Alt-S** / `:statusbar` hides or restores the floating controls without changing Dev's bar settings.
-Tool shortcuts remain available while controls are hidden. Commands, searches, and notifications
-still appear as floating feedback without resizing the page, so errors are not lost.
-Themes have **no button in either mode**; use **Cmd/Ctrl-Shift-T** or `:theme`.
-
-### Undo and redo
-
-| Action | macOS | Windows / Linux |
-| --- | --- | --- |
-| Undo | `Cmd-Z` | `Ctrl-Z` |
-| Redo | `Cmd-Shift-Z` | `Ctrl-Shift-Z` or `Ctrl-Y` |
-
-These shortcuts share history with Vim `u` / `Ctrl-R` and work in Markdown,
-plain-text documents, and staged Files edits. They affect only the focused
-buffer; undoing Files edits does not reverse filesystem changes already saved.
-In Insert mode, undo finishes the current typing transaction and leaves you
-in Insert mode. Redo restores the insertion caret, including at the end of a
-line. Typing after an undo starts a new transaction and discards the redo branch.
-Visual selections are cleared when using undo or redo.
-
-History shortcuts are inactive in Terminal, command/search input, IME
-composition, and open pickers/dialogs. Terminal control keys remain available
-to the shell. Reassign the `undo` and `redo` actions in `[keys]`; an explicit
-key map replaces all defaults.
-
-## Markdown editing
-
-### Format selected text
-
-Select text with `v` / `V`, mouse dragging, or a double-click, then use:
-
-| Format | macOS | Linux / Windows | Config action |
-| --- | --- | --- | --- |
-| Bold | `Cmd-B` | `Ctrl-B` | `bold` |
-| Italic | `Cmd-I` | `Ctrl-I` | `italic` |
-| Underline | `Cmd-U` | `Ctrl-U` | `underline` |
-| Strikethrough | `Cmd-Shift-X` | `Ctrl-Shift-X` | `strikethrough` |
-| Inline code | `Cmd-Shift-C` | `Ctrl-Shift-C` | `inline-code` |
-
-These toggle `**bold**`, `*italic*`, `<u>underline</u>`, `~~strikethrough~~`,
-and backtick-delimited inline code. Backtick fences grow as needed for literal
-backticks in the selection. Repeating a shortcut removes that format. The
-selected content and selection direction stay selected; one `Esc`, then `u`
-undoes the whole formatting operation (`Ctrl-R` redoes it).
-
-Formatting is selection-only: without a Visual or Visual-line selection it
-does nothing, including in Insert mode. Each nonempty selected physical line
-is formatted separately, leaving surrounding whitespace and blank lines
-unchanged. It only applies in Markdown editor buffers (`.md` or untitled),
-not Files, Terminal, plain-text files, command/search input, IME composition,
-or open dialogs/pickers. A selection touching a fenced or indented code block
-is left unchanged.
-
-Underline uses the limited inline HTML `<u>` tag because Markdown has no
-standard underline syntax. Rockdown previews it, but other Markdown renderers
-may strip or ignore it. No arbitrary HTML rendering is enabled.
-
-All five shortcuts can be reassigned in `[keys]`. On Linux/Windows the default
-`Ctrl-U` formatting binding takes precedence over Vim half-page-up; remap or
-omit `underline` to use that Vim key. macOS uses `Cmd-U`, leaving `Ctrl-U` free.
-
-### Document outline and section links
-
-Click **Outline** in the Dev footer or Writer bubble group, press **Cmd/Ctrl-Shift-O**, or enter `:outline`.
-The dismissible navigator lists the current Markdown document's headings with
-their hierarchy and current-section indication. Type to filter heading titles
-(including Chinese IME input), use Up/Down to select and Enter to jump, or click a
-heading. Escape dismisses it. Navigation leaves document text, editing mode, and
-undo history unchanged.
-
-ATX (`# Heading`) and setext headings are included, including headings inside
-quotes or lists; apparent headings inside code blocks are excluded. The outline
-updates after edits, document switches, and Save As. Non-Markdown files do not
-generate an outline.
-
-Cmd-click or Ctrl-click a local `#fragment` link in Markdown preview to jump to
-its heading, including wrapped prose and table cells. Anchors use lowercase
-Unicode heading text with punctuation removed, whitespace replaced by hyphens,
-and numeric suffixes for duplicates. Percent-encoded fragments are supported.
-Unknown fragments do not move the caret. This is document-local navigation:
-it does not open remote links, build a cross-file index, or fetch anything.
-
-### Modes and common keys
-
-| Keys | Action |
-| --- | --- |
-| `i`, `a`, `I`, `A` | Insert before/after the cursor or at the beginning/end of the line. |
-| `o`, `O` | Open a line below/above and enter Insert mode. |
-| `Esc` | Return to Normal mode. |
-| `v` | Enter Visual mode for character selections. |
-| `V` | Enter Visual-line mode to select complete lines, including empty lines. |
-| `h`, `j`, `k`, `l` or arrow keys | Move the cursor. |
-| `w`, `b`, `e` | Move by words. |
-| `0`, `$` | Move to the beginning/end of the line. |
-| `gg`, `G` | Move to the beginning/end of the document. |
-| `Ctrl-D`, `Ctrl-U` | Move cursor and viewport down/up by half a pane. A count sets the number of lines for subsequent half-page motions in that buffer. |
-| `zz`, `zt` | Center the current line or place it at the top without moving the cursor. The editor can scroll into half a pane of blank space above the document, so even the first line can be centered. A count first selects that line, e.g. `40zz`. |
-| `x`, `dd`, `dw`, `d$` | Delete a character, line, word, or through the end of the line. |
-| `cc`, `cw` | Change a line or word and enter Insert mode. |
-| `yy`, `p`, `P` | Yank a line; paste after/before the cursor. |
-| `>>`, `<<` | Indent / outdent the current line; `3>>` shifts three lines. |
-| `>`, `<` in either Visual mode | Indent / outdent every selected line. |
-| `u`, `Ctrl-R` | Undo / redo. |
-| `/text`, then Return | Search forward for literal text. |
-| `n` | Find the next match. |
-
-Counts work with supported motions and operators, such as `3j` or `2dd`. In either Visual mode, use `y`, `d`, or `c` to yank, delete, or change the selection; `p` / `P` replace it with the current clipboard. `V` selects whole lines, while `v` selects characters. Press the other visual key to switch selection type, or repeat the current one to return to Normal mode. `Ctrl-C` copies a visual selection to the system clipboard, preserving whole-line paste behavior for Visual-line selections; `Ctrl-V` pastes clipboard text. On macOS, use `Cmd-C` / `Cmd-V` instead. `Ctrl-Shift-V` pastes on all platforms.
-
-Indentation uses a literal tab, matching Insert-mode Tab. Outdent removes leading ASCII whitespace through one four-column tab stop (one tab or up to four spaces). Completely empty lines stay empty when indented. Shifts are one undoable edit and leave the clipboard unchanged. Motion forms such as `>j` and `<G` work too; a count in Visual mode, such as `3>`, shifts the selection by that many indentation levels.
-
-The editor and file explorer share the **system clipboard** for Vim operations: `y`/`yy` copy text, and `p`/`P` paste the current clipboard after/before the cursor. This also works across buffers and after explorer navigation or refresh. Linewise yanks paste as whole lines; characterwise yanks stay inline. Text copied from another application replaces the previous yank. As with Vim's unnamed register, delete/change operations also copy the removed text. Explorer yanks copy the displayed filename, not the file's contents.
-
-**Return behavior:** in Insert mode, Return splits the line at the caret, continuing Markdown lists and quotes as described below. In Normal mode, it opens a line below and enters Insert mode. In the command line, Return executes the command.
-
-### Markdown typing helpers
-
-In Insert mode, Return continues a Markdown list or quote using the current indentation and marker. Numbered lists increment the current number; a new task starts unchecked. Return on an empty item removes its marker, and an empty quote exits one quote level. **Shift-Return** always inserts a literal newline. Plain-text files, code blocks, Normal/Visual Return behavior, and pasted text remain literal.
-
-Click a task's `[ ]` or `[x]` marker to toggle it in source or preview. The change is undoable and preserves the caret and editing mode. Modified clicks retain ordinary editor behavior. Task-like text inside code blocks is not interactive.
-
-### Pasting and dropping images
-
-Paste an image with **Cmd-V** or **Ctrl-Shift-V**, or drag local image files into
-the Markdown editor. Clipboard images insert at the caret; file drops use the
-drop position when it is over laid-out text. PNG, JPEG, GIF, and WebP are checked
-from their actual bytes, not just their extensions.
-
-Rockdown copies the images into `assets/` beside the document and inserts ordinary
-Markdown links. Set the top-level `image_assets_dir = "assets"` option to another
-relative child directory, such as `"images"` or `"文章 圖片"`. Absolute paths,
-parent traversal, backslashes/drive prefixes, and symlink asset directories are
-rejected. Imported links percent-encode spaces, Chinese characters, and reserved
-filename characters so the document and asset directory can travel together.
-
-- Untitled documents first open Save As. Cancelling creates no assets. The import
-  stays attached to the initiating document if you switch tabs while the dialog
-  is open; changing or closing that document cancels the pending import.
-- Existing assets are never overwritten. Identical regular-file assets can be
-  reused; other collisions receive a new filename. Original image files are
-  copied, never moved.
-- Image validation and copying run in the background. Switching tabs keeps the
-  import attached to its original document and insertion position. Editing,
-  reloading, saving, or closing that document before completion rejects the
-  insertion with a retry message; already copied assets are retained.
-- A batch inserts as one undoable edit. A validation or copy failure rolls back
-  newly created assets; undo removes the Markdown insertion **without deleting
-  image files**, which might be shared by other links. The document remains
-  unsaved until you Save.
-- Files refreshes automatically after images are copied. Pending Files edits are
-  never discarded: commit or undo those edits, then use `:e` when the status bar
-  reports that refreshing was deferred.
-- Plain-text files, the terminal, Files, and the outline do not import images.
-  Text clipboard content stays literal.
-- Local previews load in the background, are centered in the writing column,
-  and honor EXIF rotation and mirroring. Preview bitmaps are limited to 1600
-  pixels on their longest edge; source image bytes remain unchanged.
-- Missing, unreadable, or unsupported local images show an explanatory preview
-  label. Restoring or replacing a missing file is picked up on the next render.
-  Remote images remain alt text: nothing is uploaded or fetched.
-
-Save As and file renames do not relocate existing assets or rewrite their links.
-Move/copy the Markdown file together with its relative asset directory when
-relocating the document.
-
-### Whole-buffer substitution
-
-From Normal mode, use `:%s/pattern/replacement/flags` in the editor or file explorer:
-
-```vim
-:%s/old/new/          " First match on each line
-:%s/old/new/g         " All matches on each line
-:%s/old/new/gi        " All matches, ignoring case
-:%s#old/path#new/path#g
-:%s/(word)/[\1]/g     " Capture references; & inserts the whole match
-```
-
-The comments above explain the examples; do not include them in the command. Patterns use **Rust regex syntax** (for example, `(group)`, `\d+`, and `^`/`$`), not Vim's regex dialect. Matching is per physical line. `g` replaces all matches per line; `i` ignores case, and `I` forces case-sensitive matching. Escape a delimiter with `\`; use `\&` for a literal ampersand, `\\` for a backslash, and `\r` or `\n` to insert a newline. The final delimiter is optional when no flags are supplied.
-
-One `u` undoes the entire substitution; `Ctrl-R` redoes it. Invalid patterns, unsupported flags (including interactive `c` confirmation), and missing matches report an error without changing the buffer. An empty pattern is rejected rather than reusing a previous search. In the explorer, replacements stage filename edits; `:w` commits them with the usual safety checks.
-
-### Saving, opening, and quitting
-
-### Document dialogs
-
-Use **Ctrl/Cmd-N** for a new document, **Ctrl/Cmd-O** to open a file,
-**Ctrl/Cmd-S** to save, and **Ctrl/Cmd-Shift-S** for Save As. Untitled documents
-open a native save dialog. These actions also appear in the native File menu
-where the platform supports menus. Configure them using the `new`, `open`,
-`save`, and `save-as` key actions. A dot beside a document name indicates unsaved
-changes; the footer confirms saves and reports cancellation or conflicts.
-
-Closing a tab offers Save / Discard / Cancel. Window close (including `:q`)
-checks every dirty document, then explicitly asks about staged Files operations.
-Cancelling any prompt keeps the window and its documents open. Earlier successful
-saves remain saved; discarded buffers are retained until the entire close flow
-is accepted. Saving staged Files changes applies renames, creations, and moves
-to trash, just as `:w` in Files does.
-
-Colon commands remain available. In Files, Ctrl/Cmd-S still applies staged
-operations; Save As always targets the active document. Save As preserves file
-conflict and buffer-ownership checks: choosing an existing unrelated file reports
-a conflict rather than replacing it. Explicit `:w! path` is available for
-intentional overwrites. `:q!` continues to explicitly discard everything.
-
-Enter these commands from Normal mode. Focus the editor first with `Ctrl-W h`; `:w` and `:e` have different meanings in the explorer.
-
-| Command | Action |
-| --- | --- |
-| `:w` | Save the current document. |
-| `:w filename.md` | Save under the given filename. |
-| `:w! [filename.md]` | Explicitly overwrite a disk conflict or existing destination. |
-| `:e filename.md` | Open a file, start a named buffer if it does not exist, or activate its existing buffer. Other buffers keep their edits. |
-| `:e` | Reload the current document, refusing unsaved changes. |
-| `:e!` | Discard current edits and reload from disk. |
-| `:q` | Close the window only if all editor buffers and the explorer are clean. |
-| `:q!` | Close the window and discard all unsaved/staged changes. |
-| `:wq` | Save the focused buffer, then close only if no other unsaved changes remain. |
-
-Relative paths in `:e` and `:w` are resolved against the **current explorer directory**. Saving does not create missing parent directories.
-
-Saves check for external file changes instead of silently overwriting them. If a conflict is reported, inspect the disk version before choosing `:e!` to reload or `:w!` to overwrite. Saving over a file owned by another open buffer is refused even with `:w!`.
-
-Existing LF or CRLF line endings and UTF-8 BOMs are preserved when saving. Editing and clipboard paste use normalized newlines internally. New documents without an existing newline style use CRLF on Windows and LF elsewhere. Mixed-ending files are normalized to the first newline's style on save.
-
-### Recovery and restart
-
-Rockdown checkpoints open documents to private, per-user recovery storage at startup,
-every two seconds, and after document switches. A crash can lose changes since the
-last successful checkpoint. These snapshots **never overwrite your Markdown files**
-and are not a replacement for backups or explicit Save.
-
-- Opening a directory (or launching without file arguments) resumes that directory's session.
-- Explicit file arguments use a separate session keyed by the ordered, resolved file paths
-  and startup directory. Repeating that invocation restores its drafts and tabs without
-  replacing an unrelated directory session; requested files remain open.
-- Dirty named and untitled drafts recover their text. Previously saved, unchanged tabs
-  reload the current disk version. Recovered edits retain the original disk baseline,
-  so external changes still cause a save conflict rather than being silently overwritten.
-- Confirmed close/Discard and `:q!` remove discarded draft contents from recovery.
-  Saved file tabs reopen from disk next time; untitled and never-saved tabs are omitted.
-  Cancelling a close keeps drafts recoverable.
-- Cursor and viewport resume with valid bounds. Editor mode resumes in Normal mode;
-  undo history, selections, registers, terminal sessions, and staged Files operations
-  are not restored.
-
-Storage is `~/Library/Application Support/rockdown/recovery` on macOS,
-`$XDG_STATE_HOME/rockdown/recovery` (or `~/.local/state/rockdown/recovery`) on Linux,
-and `%LOCALAPPDATA%\\rockdown\\recovery` on Windows. Snapshots are private local files,
-not encrypted. Only one running instance may own a given recovery session.
-If recovery is unavailable, a persistent banner explains the failure; explicit Save
-still works. Corrupt snapshots are left untouched, with recovery disabled for that
-launch. A failed final checkpoint cancels close rather than leaving discarded text
-eligible for recovery.
-
-## Buffer management
-
-An **editor buffer** is an open document, not a file explorer entry. Closing a buffer never deletes its file from disk.
-
-Click a tab to select a document, or its **×** to close it. Closing an inactive tab leaves the selected document active. A dot indicates unsaved changes; closing a dirty document offers Save / Discard / Cancel.
-
-| Action | Commands |
-| --- | --- |
-| Previous buffer | `:bp`, `:bprevious`, `:previous-buffer` |
-| Next buffer | `:bn`, `:bnext`, `:next-buffer` |
-| Close current buffer | `:bd`, `:bdelete`, `:buffer-delete` |
-| Discard edits and close | `:bd!`, `:bdelete!`, `:buffer-delete!` |
-
-Navigation wraps in opening order. Opening an already-open file activates its existing buffer rather than creating a duplicate. Closing the final buffer leaves a fresh, empty untitled buffer.
-
-Unsaved buffers remain protected even when inactive: switching is allowed, but a normal buffer close or window quit will not discard their edits.
-
-## File explorer
-
-The right dock is an **editable listing of filenames**. Its Vim editing commands stage filesystem operations; they do not change files until you commit with `:w`.
-
-### Navigate and resize
-
-- `Ctrl-W l` or `:ex`: reveal and focus the explorer.
-- `j` / `k`: select an entry.
-- Return in Normal mode: open a file or enter a directory.
-- `-` in Normal mode: go to the parent directory.
-- `Ctrl-E` / `Cmd-E`, or the bottom-right **folder icon**: toggle visibility.
-- Drag the dock's **left edge** to resize it. Width is bounded to leave room for the editor.
-
-Hiding the explorer preserves its staged edits and resized width. Resizing changes the current session's width; it does not write your configuration file.
-
-### Edit filenames like a buffer
-
-| Operation | Steps |
-| --- | --- |
-| Rename an entry | Select its line, press `cc`, type the replacement name, then `Esc`. |
-| Create a file | Press `o`, type a new filename such as `note.md`, then `Esc`. |
-| Create a directory | Add a new line whose name ends in `/`, such as `drafts/`. |
-| Stage deletion | Select an entry and press `dd`. |
-| Apply all staged changes | Enter `:w`. |
-| Discard staged changes and reload | Enter `:e!`. |
-| Refresh a clean listing | Enter `:e`. |
-
-For example, to rename `draft.md` to `article.md`, select its line, use `cc` to replace the name, press `Esc`, then enter `:w`.
-
-Navigation and ordinary reload refuse pending changes. Commit them, undo them, or explicitly discard them before navigating elsewhere. Duplicate destination names, path traversal, entry-type changes, and detected external filesystem changes are rejected.
-
-**Deletion is recoverable:** committed deletions are moved into a transaction subdirectory under `.rockdown-trash` at the explorer's workspace root. They are not sent to the OS Trash. Recover them by moving the entries back using a terminal or file manager. Trash is hidden from the explorer listing; navigating outside the original workspace can establish a new trash root.
-
-Editing the listing changes names and creates new empty files/directories—it is not a file-content copy interface. Explorer renames and deletions are also reconciled with all open editor buffers.
-
-## Terminal dock
-
-Click the bottom-left **terminal icon**, press Ctrl + backtick, or enter `:term` to toggle the bottom terminal dock. It starts a real shell in the explorer's directory **at the time the session is created**.
-
-- Return executes the command.
-- `Ctrl-C` interrupts a foreground command.
-- `Ctrl-D` sends end-of-input in Unix shells; at an empty Unix shell prompt this usually exits the shell. In Windows shells, use `exit` instead.
-- `Ctrl-Shift-V` (or `Cmd-V` on macOS) pastes, using bracketed paste when the terminal application enables it.
-- `Ctrl-W h` / `Ctrl-W l` moves focus back to the editor / explorer.
-
-Hiding the dock keeps the shell session running. When the shell exits—through `exit` or `Ctrl-D` at an empty prompt—the dock closes automatically. If the terminal had focus, focus returns to the editor; otherwise the current pane keeps focus. Opening the dock again starts a fresh session. `Ctrl-D` handled by a foreground program does not close the dock while the shell is still running. Navigating the explorer does not automatically change an already-running shell's working directory. Closing the application terminates its terminal session.
+| `Cmd/Ctrl-N` / `Cmd/Ctrl-O` | New document / open file |
+| `Cmd/Ctrl-S` / `Cmd/Ctrl-Shift-S` | Save / Save As |
+| `Ctrl-PageUp` / `Ctrl-PageDown` | Previous / next document |
+| `Cmd-W` / `Ctrl-Shift-W` | Close document on macOS / Windows and Linux |
+| `Cmd/Ctrl-E` | Show or hide Files |
+| Ctrl + backtick | Show or hide terminal |
+| `Ctrl-W h` / `Ctrl-W l` / `Ctrl-W j` | Focus editor / Files / terminal |
+| `Cmd/Ctrl-Shift-O` | Document outline |
+| `Cmd/Ctrl-Shift-M` | Dev / Writer mode |
+| `Cmd/Ctrl-Shift-T` | Theme picker |
+| `F1` | Keyboard guide |
+
+In Normal mode, `u` undoes and `Ctrl-R` redoes. Standard platform undo/redo shortcuts also work. Select text to apply formatting shortcuts such as **Cmd/Ctrl-B** for bold or **Cmd/Ctrl-I** for italic.
+
+### Files and terminal
+
+Files is an editable listing of filenames. Use `j` / `k` to select an entry, Return to open it, and `-` to go to its parent directory.
+
+- `cc` renames an entry, `o` adds a file (or a directory if the name ends in `/`), and `dd` stages deletion.
+- `:w` or **Cmd/Ctrl-S** in Files commits staged operations; `:e!` discards them.
+- Committed deletions go to **`.rockdown-trash` at the workspace root**, not the OS Trash. Restore them with a file manager or terminal.
+
+The terminal starts in the current Files directory. Hiding it keeps the shell running; `exit` ends the session. Use **Ctrl-Shift-V** to paste and **Ctrl-C** to interrupt a command.
+
+### Images, saving, and recovery
+
+- Paste images with **Cmd-V / Ctrl-Shift-V**, or drop local image files into a Markdown document. Images are copied into `assets/` beside the document; untitled documents first prompt to save. Remote images are not fetched.
+- Undoing an image insertion removes the link, not the image file. Save As and renames do not relocate assets: move documents together with their asset directories.
+- Saves detect external file changes rather than silently overwriting them. Inspect conflicts before using `:e!` to discard edits and reload, or `:w!` to force an overwrite.
+- Local recovery checkpoints preserve drafts, **not automatic saves or backups**. Recent edits can be lost between checkpoints; undo history, terminal sessions, and staged Files operations do not survive a restart. Recovery files are local and unencrypted.
+- Closing a dirty document prompts to Save / Discard / Cancel. `:q!` explicitly discards all unsaved and staged changes.
 
 ## Configuration
 
-Rockdown loads configuration in this order:
+Start with [`examples/config.toml`](examples/config.toml), which includes appearance settings and the shortcut map.
 
-1. The file explicitly supplied with `--config PATH`.
-2. Otherwise, `config.toml` under `$XDG_CONFIG_HOME/rockdown/`.
-3. If `XDG_CONFIG_HOME` is unset or empty, use `%APPDATA%\rockdown\` on Windows (falling back to `%USERPROFILE%\AppData\Roaming\rockdown\`), or `~/.config/rockdown/` on Unix.
-4. If no config file exists, built-in defaults are used.
+Default location:
 
-An invalid selected config produces an error on startup or reload. Project-local config is not loaded automatically.
+- **macOS / Linux:** `~/.config/rockdown/config.toml`
+- **Windows:** `%APPDATA%\rockdown\config.toml`
+- **With `XDG_CONFIG_HOME`:** `$XDG_CONFIG_HOME/rockdown/config.toml` takes precedence over those defaults.
 
-### Colorscheme files and live preview
-
-Press **Ctrl/Cmd-Shift-T** or run `:theme` to open the theme picker.
-Hover a palette or use **↑/↓**, **j/k**, or **Tab** to preview it immediately.
-Click or press **Enter** to keep it; **Esc** or clicking outside cancels and restores
-the exact previous palette. **Current theme** preserves your custom colors.
-
-The built-in themes are **Rockdown** (dark) and **Paper** (light). Additional
-themes are loaded from `colorscheme/*.toml` inside your configuration directory.
-The picker updates workspace and Markdown
-colors, preset-specific fenced-code syntax highlighting, and the terminal's
-16 ANSI colors without changing document contents. Choosing a preset replaces
-session Markdown color overrides, including heading and divider colors, while
-preserving font sizes, heading underlines, and divider thickness. **Current
-theme** or canceling restores the previous custom colors.
-
-Picker choices last for the current session and never rewrite your config.
-For a startup preference, add a preset to your existing `[theme]` table
-(install the Nord example below before selecting `nord`):
+Use `--config PATH` to select a different file. Without a config file, built-in defaults apply. Project-local configuration is not loaded automatically.
 
 ```toml
-[theme]
-preset = "nord"
-# accent = "#a3be8c" # Optional override.
-```
-
-Built-in IDs are `rockdown` and `paper`; custom IDs are filenames without `.toml`.
-At startup, explicit `[theme]` and Markdown color fields
-override the preset, so remove old color overrides if you want the complete
-preset. `:config` restores your configured palette and Markdown overrides.
-The configurable shortcut action is `themes`. Explicit terminal RGB colors
-and extended xterm colors (indexes 16–255) remain controlled by terminal programs.
-
-#### Installing or creating a colorscheme
-
-Copy [`examples/nord.toml`](examples/nord.toml) to:
-
-- Unix: `~/.config/rockdown/colorscheme/nord.toml`
-- Windows: `%APPDATA%\rockdown\colorscheme\nord.toml`
-- With `XDG_CONFIG_HOME`: `$XDG_CONFIG_HOME/rockdown/colorscheme/nord.toml`
-- With `--config PATH`: `colorscheme/nord.toml` beside that configuration file.
-
-Reopen the Theme picker to discover new or edited files. `:config` reloads the
-startup selection and its colorscheme file. A missing `colorscheme/` directory
-is fine: only the two built-in themes appear. Custom files are sorted by ID
-after the built-ins. Invalid files report their path instead of silently
-falling back; `rockdown` and `paper` are reserved IDs.
-
-Each file accepts these optional settings; unspecified colors inherit `base`
-(`rockdown` by default, or `paper`). Custom themes cannot inherit another file.
-
-| Section | Fields |
-| --- | --- |
-| Top level | `name`: picker label (defaults to filename); `base`: `rockdown` or `paper`. |
-| `[theme]` | `background`, `panel`, `foreground`, `muted`, `accent`. |
-| `[syntax]` | `foreground`, `comment`, `variable`, `constant`, `type`, `string`, `escape`, `function`, `keyword`, `embedded`. |
-| `[terminal]` | `ansi`: exactly 16 RGB colors, standard ANSI 0–15 order. |
-| `[markdown.colors]` | `normal`, `bold`, `italic`, `bold_italic`, `code`, `link`, `strikethrough`, `quote`. |
-| `[markdown.h1]` through `[markdown.h6]` | `color`. |
-| `[markdown.divider]` | `color`. |
-
-Colors are six-digit RGB strings, with or without `#`. Unknown fields and invalid
-colors are rejected. Keep typography (font sizes, underlines, divider thickness)
-in `config.toml`; colorscheme files contain colors only. Explicit syntax/ANSI
-colors stay as authored; inherited syntax/ANSI colors adapt to the background's
-brightness.
-
-### TOML example
-
-```toml
-font_family = "Menlo"
 font_size = 16
-line_height = 30
-explorer_width = 300
-terminal_height = 240
+writing_width = 820
+markdown_line_numbers = false
 image_assets_dir = "assets"
-shell = "/bin/zsh"
 
 [theme]
-preset = "rockdown"
-# Optional override:
-# accent = "#9cc7b5"
+preset = "paper" # "rockdown" for the built-in dark theme
 ```
 
-A complete example, including the default shortcut map, is provided in [`examples/config.toml`](examples/config.toml).
-
-### Available settings
-
-| Setting | Default | Notes |
-| --- | --- | --- |
-| `font_family` | `Consolas` on Windows, `Menlo` elsewhere | Use a font installed on your system. |
-| `font_size` | `15` | Range: 10–32. |
-| `line_height` | `30` | At least `font_size + 4`, at most 64. |
-| `image_assets_dir` | `"assets"` | Relative child directory for pasted/dropped images; no parent traversal or symlink directories. |
-| `explorer_width` | `290` | Configured range: 180–600; display width also respects window size. |
-| `terminal_height` | `240` | Range: 100–600. |
-| `shell` | Windows: `%COMSPEC%`, then `cmd.exe`; Unix: `$SHELL`, then `/bin/sh` | Shell executable, not a command string with arguments. |
-| `theme` | Rockdown | `preset` selects `rockdown`, `paper`, or a colorscheme filename; optional six-digit RGB colors override individual fields. |
-| `markdown` | Inherited colors and built-in heading sizes | Nested appearance settings described below. |
-| `keys` | Built-in shortcuts | Maps GPUI keystrokes to action names. |
-
-Unknown settings, unsupported action names, and invalid values are rejected.
-
-### Markdown appearance
-
-The optional `markdown` table customizes appearance. Existing configs need no changes: omitted tables and fields retain their defaults, including partial settings within a heading or color table.
-
-| Table | Fields | Defaults and limits |
-| --- | --- | --- |
-| `markdown.colors` | `normal`, `bold`, `italic`, `bold_italic`, `code`, `link`, `strikethrough`, `quote` | Optional six-digit RGB hex colors, with or without `#`. |
-| `markdown.h1` through `markdown.h6` | `font_size`, `color`, `underline` | Each level is independent. Optional `font_size`: 10–128; optional RGB `color`; `underline`: `false`. |
-| `markdown.divider` | `color`, `thickness` | Optional RGB `color`; `thickness`: `1`, range 0.5–12. |
-
-`normal` inherits `theme.foreground` when omitted. It sets the editor's base text color, including the active line's raw source and plain-text documents; explorer text continues to use the theme. Headings, `code`, and `link` default to `theme.accent`. Quotes, strikethrough text, and dividers default to `theme.muted`. Unset emphasis colors inherit the applicable heading or quote color, then `normal`.
-
-Color precedence, highest first, is **syntax highlighting → code → link → bold-italic → bold → italic → strikethrough → heading/quote → normal**. A missing optional override leaves the inherited color in place rather than masking a lower-priority color.
-
-All six heading levels can override their size, color, and underline separately. An omitted heading size uses the built-in scaling relative to `font_size`. Larger heading sizes automatically expand rows so content is not clipped; you do not need to increase `line_height` to fit them. `underline = true` draws a full-width line below that heading's content. Heading underlines and horizontal rules share `markdown.divider.color` and `markdown.divider.thickness`.
-
-For example, these TOML settings enlarge and underline first-level headings and
-set fixed bold, link, and divider colors. Omit the colors to follow the preset;
-selecting a built-in preset in the picker replaces them for that session only.
-
-```toml
-[markdown.colors]
-bold = "#f2cf8f"
-link = "#8fc8ed"
-
-[markdown.h1]
-font_size = 36
-underline = true
-
-[markdown.divider]
-color = "#566575"
-thickness = 1.5
-```
-
-Font sizes and thicknesses must be finite; invalid colors, out-of-range values, and unknown nested fields are rejected. Use `:config` after saving the selected config to reload appearance without restarting; row sizes are recalculated in every pane.
-
-### Custom shortcuts
-
-Supported action names are:
-
-```text
-save
-new
-open
-save-as
-paste
-undo
-redo
-bold
-italic
-underline
-strikethrough
-inline-code
-explorer
-terminal
-editor
-help
-themes
-ui-mode
-outline
-tab-bar
-status-bar
-buffer-delete
-previous-buffer
-next-buffer
-```
-
-`explorer` and `terminal` toggle their docks. `buffer-delete` is the safe close action; forced discard remains an explicit command such as `:bd!`.
-
-**Defining `[keys]` in TOML replaces the entire default shortcut map; it does not merge individual entries.** Copy the full map from an example file and modify it if you want to retain the other defaults. Vim editing keys and colon commands remain available unless a configured shortcut takes precedence (notably the default `Ctrl-U` underline binding on Linux/Windows).
-
-Validate a config before launching:
+Validate a configuration without opening a window:
 
 ```sh
 ./target/release/rockdown --check-config --config examples/config.toml
 ```
 
-Run with an explicit config:
+Use `:config` to reload settings in the app. Invalid settings report an error. **Defining `[keys]` replaces the entire default shortcut map**, so copy and adapt the example map if you want to keep other defaults.
 
-```sh
-./target/release/rockdown /path/to/notes --config /path/to/config.toml
-```
+For a custom theme, copy [`examples/nord.toml`](examples/nord.toml) to `colorscheme/nord.toml` beside your config and set `[theme] preset = "nord"`. Theme-picker choices apply only to the current session.
 
-Use `:config` to reload settings in the app. A changed shell setting applies to the next terminal session, not the currently running one.
+Use `--help` for command-line options and **F1** for the in-app reference.
 
-## Current boundaries
-
-- Vim support is a focused set of editing commands, not a complete Vim or Neovim implementation.
-- Markdown rendering is line-based live preview, not a separate rich-text document format.
-- Local images render in place. Remote image URLs remain alt text; opening a document does not fetch them over the network.
-- Files must be UTF-8. The explorer rejects filenames it cannot represent safely as individual text lines.
-- Recovery is separate from saving: Markdown files are never automatically saved. Checkpoints are periodic, and undo history and staged filesystem operations do not survive a restart.
-
-## Source layout
-
-The larger subsystems keep their public types and entry points in `src/<module>.rs`,
-with private implementation modules under `src/<module>/`. Public imports remain
-`rockdown::app`, `rockdown::vim`, and `rockdown::surface`; the child files are not
-additional public APIs.
-
-| Area | Where to work |
-| --- | --- |
-| Workspace state and construction | `src/app.rs` |
-| Document lifecycle, recovery, image import | `src/app/{documents,recovery,images}.rs` |
-| Actions, keyboard routing, IME/text input | `src/app/{commands,keyboard,text_input}.rs` |
-| Pane focus, pointer interaction, scrolling | `src/app/{panes,navigation}.rs` |
-| Workspace chrome, panels, rendering | `src/app/{chrome,help,outline_picker,themes,ui_mode,render}.rs` |
-| Buffer state and shared text primitives | `src/vim.rs` |
-| Vim key dispatch, motions, operators | `src/vim/{keys,motions,operators}.rs` |
-| Editing, clipboard, selection, undo, substitution | `src/vim/{editing,clipboard,selection,history,substitution}.rs` |
-| Surface types, layout and hit testing | `src/surface.rs`, `src/surface/layout.rs` |
-| Text, tables, image caching, terminal painting | `src/surface/{text,table,images,terminal,render}.rs` |
-| PTY lifecycle and Windows I/O workers | `src/terminal.rs`, `src/terminal/windows.rs` |
-| Explorer filesystem transactions | `src/explorer.rs` |
-
-Existing unit tests live in private `tests` modules or beside the implementation
-they exercise; end-to-end workspace tests remain under `tests/`. For a focused
-change, start with the owning file rather than loading every sibling. Keep
-cross-module helpers scoped to their parent and split by responsibility, not an
-arbitrary line limit.
-
-## Development checks
-
-From the repository root:
+## Development
 
 ```sh
 cargo fmt --all --check
@@ -735,6 +144,4 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release --locked
 ```
 
-Tests cover Vim/Unicode editing, document save conflicts, buffer lifecycle, explorer operations and recovery, Markdown projection, configuration, keyboard normalization, and terminal behavior. Tests are not a substitute for native-window interaction checks when changing the UI.
-
-After rebuilding, restart any already-running Rockdown instance to use the updated executable.
+UI changes also require native-window interaction checks. Restart any running instance after rebuilding.
