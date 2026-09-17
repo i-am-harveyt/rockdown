@@ -98,6 +98,7 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &Redo, window, cx| this.run_action("redo", window, cx)),
             )
+            .on_action(
                 cx.listener(|this, _: &Bold, window, cx| this.run_action("bold", window, cx)),
             )
             .on_action(

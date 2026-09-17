@@ -504,6 +504,9 @@ impl Default for Config {
                     }
                     .into(),
                     "redo".into(),
+                ),
+                (
+                    if cfg!(target_os = "macos") {
                         "cmd-b"
                     } else {
                         "ctrl-b"
