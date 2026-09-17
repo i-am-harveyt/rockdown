@@ -504,6 +504,48 @@ impl Default for Config {
                     }
                     .into(),
                     "redo".into(),
+                        "cmd-b"
+                    } else {
+                        "ctrl-b"
+                    }
+                    .into(),
+                    "bold".into(),
+                ),
+                (
+                    if cfg!(target_os = "macos") {
+                        "cmd-i"
+                    } else {
+                        "ctrl-i"
+                    }
+                    .into(),
+                    "italic".into(),
+                ),
+                (
+                    if cfg!(target_os = "macos") {
+                        "cmd-u"
+                    } else {
+                        "ctrl-u"
+                    }
+                    .into(),
+                    "underline".into(),
+                ),
+                (
+                    if cfg!(target_os = "macos") {
+                        "cmd-shift-x"
+                    } else {
+                        "ctrl-shift-x"
+                    }
+                    .into(),
+                    "strikethrough".into(),
+                ),
+                (
+                    if cfg!(target_os = "macos") {
+                        "cmd-shift-c"
+                    } else {
+                        "ctrl-shift-c"
+                    }
+                    .into(),
+                    "inline-code".into(),
                 ),
                 ("cmd-e".into(), "explorer".into()),
                 ("ctrl-e".into(), "explorer".into()),
@@ -717,6 +759,11 @@ impl Config {
                 "paste",
                 "undo",
                 "redo",
+                "bold",
+                "italic",
+                "underline",
+                "strikethrough",
+                "inline-code",
                 "explorer",
                 "terminal",
                 "themes",

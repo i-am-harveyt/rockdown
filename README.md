@@ -196,6 +196,40 @@ key map replaces all defaults.
 
 ## Markdown editing
 
+### Format selected text
+
+Select text with `v` / `V`, mouse dragging, or a double-click, then use:
+
+| Format | macOS | Linux / Windows | Config action |
+| --- | --- | --- | --- |
+| Bold | `Cmd-B` | `Ctrl-B` | `bold` |
+| Italic | `Cmd-I` | `Ctrl-I` | `italic` |
+| Underline | `Cmd-U` | `Ctrl-U` | `underline` |
+| Strikethrough | `Cmd-Shift-X` | `Ctrl-Shift-X` | `strikethrough` |
+| Inline code | `Cmd-Shift-C` | `Ctrl-Shift-C` | `inline-code` |
+
+These toggle `**bold**`, `*italic*`, `<u>underline</u>`, `~~strikethrough~~`,
+and backtick-delimited inline code. Backtick fences grow as needed for literal
+backticks in the selection. Repeating a shortcut removes that format. The
+selected content and selection direction stay selected; one `Esc`, then `u`
+undoes the whole formatting operation (`Ctrl-R` redoes it).
+
+Formatting is selection-only: without a Visual or Visual-line selection it
+does nothing, including in Insert mode. Each nonempty selected physical line
+is formatted separately, leaving surrounding whitespace and blank lines
+unchanged. It only applies in Markdown editor buffers (`.md` or untitled),
+not Files, Terminal, plain-text files, command/search input, IME composition,
+or open dialogs/pickers. A selection touching a fenced or indented code block
+is left unchanged.
+
+Underline uses the limited inline HTML `<u>` tag because Markdown has no
+standard underline syntax. Rockdown previews it, but other Markdown renderers
+may strip or ignore it. No arbitrary HTML rendering is enabled.
+
+All five shortcuts can be reassigned in `[keys]`. On Linux/Windows the default
+`Ctrl-U` formatting binding takes precedence over Vim half-page-up; remap or
+omit `underline` to use that Vim key. macOS uses `Cmd-U`, leaving `Ctrl-U` free.
+
 ### Document outline and section links
 
 Click **Outline** in the Dev footer or Writer bubble group, press **Cmd/Ctrl-Shift-O**, or enter `:outline`.
@@ -615,6 +649,11 @@ save-as
 paste
 undo
 redo
+bold
+italic
+underline
+strikethrough
+inline-code
 explorer
 terminal
 editor
@@ -631,7 +670,7 @@ next-buffer
 
 `explorer` and `terminal` toggle their docks. `buffer-delete` is the safe close action; forced discard remains an explicit command such as `:bd!`.
 
-**Defining `[keys]` in TOML replaces the entire default shortcut map; it does not merge individual entries.** Copy the full map from an example file and modify it if you want to retain the other defaults. Vim editing keys and colon commands remain available independently of that map.
+**Defining `[keys]` in TOML replaces the entire default shortcut map; it does not merge individual entries.** Copy the full map from an example file and modify it if you want to retain the other defaults. Vim editing keys and colon commands remain available unless a configured shortcut takes precedence (notably the default `Ctrl-U` underline binding on Linux/Windows).
 
 Validate a config before launching:
 

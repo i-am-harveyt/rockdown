@@ -1,6 +1,7 @@
 use super::{Buffer, MAX_UNDO_DEPTH, Mode, ViewportMotion};
 
 mod editing;
+mod formatting;
 mod motions;
 mod selection;
 mod state;
