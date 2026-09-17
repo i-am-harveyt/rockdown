@@ -12,6 +12,57 @@ pub(super) fn run(text: &str, font: Font, color: Hsla) -> TextRun {
     }
 }
 
+/// Wrap when needed and return the effective body offset alongside the layout.
+/// A marker wider than the column wraps normally instead of hanging offscreen.
+pub(crate) fn wrap_body(
+    line: &ShapedLine,
+    runs: &[TextRun],
+    width: Pixels,
+    body_start: usize,
+    window: &Window,
+) -> Result<(Option<WrappedLine>, usize)> {
+    if line.width <= width {
+        return Ok((None, 0));
+    }
+    let body_start = if line.x_for_index(body_start) < width {
+        body_start
+    } else {
+        0
+    };
+    let font_size = line.font_size;
+    if body_start == 0 {
+        let wrapped = window
+            .text_system()
+            .shape_text(line.text.clone(), font_size, runs, Some(width), None)?
+            .pop();
+        return Ok((wrapped, 0));
+    }
+    let mut skip = body_start;
+    let body_runs: Vec<_> = runs
+        .iter()
+        .filter_map(|run| {
+            let consumed = skip.min(run.len);
+            skip -= consumed;
+            (run.len > consumed).then(|| TextRun {
+                len: run.len - consumed,
+                ..run.clone()
+            })
+        })
+        .collect();
+    let wrapped = window
+        .text_system()
+        .shape_text(
+            line.text[body_start..].to_owned().into(),
+            font_size,
+            &body_runs,
+            Some((width - line.x_for_index(body_start)).max(px(1.))),
+            None,
+        )?
+        .pop();
+    let body_start = if wrapped.is_some() { body_start } else { 0 };
+    Ok((wrapped, body_start))
+}
+
 pub(super) struct SpanStyle {
     pub(super) font: Font,
     pub(super) font_size: Pixels,

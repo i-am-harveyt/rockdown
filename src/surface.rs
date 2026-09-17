@@ -9,6 +9,8 @@ mod table;
 mod terminal;
 mod text;
 
+pub(crate) use text::wrap_body;
+
 #[cfg(test)]
 mod tests;
 
@@ -28,6 +30,8 @@ pub struct HitRow {
     pub line: ShapedLine,
     pub raw: bool,
     pub wrapped: Option<WrappedLine>,
+    /// Byte offset in `line` where `wrapped` starts; zero when unwrapped.
+    pub body_start: usize,
     pub line_height: Pixels,
     pub height: Pixels,
 }

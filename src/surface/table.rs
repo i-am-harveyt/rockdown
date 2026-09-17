@@ -328,6 +328,7 @@ impl Surface {
                 .shape_line("".into(), style.font_size, &[], None),
             raw: false,
             wrapped: None,
+            body_start: 0,
             line_height: px(line_height),
             height,
         });

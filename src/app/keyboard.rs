@@ -361,10 +361,8 @@ impl Workspace {
             if self.pane == Pane::Explorer && (key == "enter" || key == "-") {
                 if key == "-" {
                     self.explorer.parent()?;
-                } else {
-                    if let Some(path) = self.explorer.enter()? {
-                        self.change_document(|documents| documents.open(&path), cx)?;
-                    }
+                } else if let Some(path) = self.explorer.enter()? {
+                    self.change_document(|documents| documents.open(&path), cx)?;
                 }
                 self.tops[Pane::Explorer.index()] = 0;
                 return Ok(true);

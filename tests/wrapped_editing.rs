@@ -71,6 +71,75 @@ fn active_paragraph_wraps_and_clicks_use_visual_rows_without_leaving_insert(
 }
 
 #[gpui::test]
+fn list_wraps_align_with_body_and_preserve_editing_coordinates(cx: &mut TestAppContext) {
+    for (prefix, preview_prefix) in [
+        ("- ", "• "),
+        ("12. ", "12. "),
+        ("7) ", "7. "),
+        ("- [ ] ", "• [ ] "),
+        ("+ [x] ", "• [x] "),
+        ("> 12. ", "12. "),
+        ("*   ", "• "),
+        ("  - ", "• "),
+    ] {
+        let body = "café 世界 words to wrap comfortably across several visual rows ".repeat(5);
+        let text = format!("{prefix}{body}\n\nend");
+        let (_directory, mut window, view) = editor(cx, &text);
+        window.simulate_keystrokes("G");
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let row = &view.read(cx).layouts[Pane::Editor.index()].rows[0];
+            assert!(!row.raw);
+            let body_x = row.position_for_index(preview_prefix.len()).x;
+            let wrapped = row.wrapped.as_ref().unwrap();
+            for boundary in &wrapped.wrap_boundaries {
+                let col = preview_prefix.len()
+                    + wrapped.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix]
+                        .index;
+                let position = row.position_for_index(col);
+                assert_eq!(position.x, body_x, "{prefix:?}");
+                assert!(position.y > row.origin.y);
+                assert_eq!(row.index_for_position(position), col);
+            }
+        });
+        window.simulate_keystrokes("g g i");
+        window.run_until_parked();
+        let (col, position) = window.update(|_, cx| {
+            let row = &view.read(cx).layouts[Pane::Editor.index()].rows[0];
+            assert!(row.raw);
+            let body_x = row.position_for_index(prefix.len()).x;
+            let wrapped = row.wrapped.as_ref().unwrap();
+            let mut destination = None;
+            for boundary in &wrapped.wrap_boundaries {
+                let col = prefix.len()
+                    + wrapped.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix]
+                        .index;
+                let position = row.position_for_index(col);
+                assert_eq!(position.x, body_x, "{prefix:?}");
+                assert_eq!(row.index_for_position(position), col);
+                destination.get_or_insert((col, position + point(px(0.), px(5.))));
+            }
+            for (col, _) in row.line.text.char_indices() {
+                assert_eq!(
+                    row.index_for_position(row.position_for_index(col)),
+                    col,
+                    "{prefix:?} at {col}"
+                );
+            }
+            destination.unwrap()
+        });
+        window.simulate_click(position, Modifiers::default());
+        window.simulate_input("X");
+        window.update(|_, cx| {
+            assert_eq!(
+                view.read(cx).documents.current().buffer.lines[0].text,
+                format!("{}X{}", &text[..col], &text[col..text.find('\n').unwrap()])
+            );
+        });
+    }
+}
+
+#[gpui::test]
 fn preview_click_skips_hidden_markup_and_drag_selects_across_wraps(cx: &mut TestAppContext) {
     let paragraph = "hello world these are more words in a paragraph ".repeat(8);
     let text = format!("outside\n**café** and [世界](url)\n{paragraph}");

@@ -32,14 +32,15 @@ impl Workspace {
             .projection
             .get(source_row)
             .is_some_and(|row| row.table.is_none() && row.kind != markdown::BlockKind::Code);
-        let wrapped = if wrap && line.width > width {
-            window
-                .text_system()
-                .shape_text(text, px(self.config.font_size), &runs, Some(width), None)
-                .ok()?
-                .pop()
+        let body_start = self
+            .projection
+            .get(source_row)
+            .and_then(|row| row.list_content)
+            .map_or(0, |(source, _)| source);
+        let (wrapped, body_start) = if wrap {
+            crate::surface::wrap_body(&line, &runs, width, body_start, window).ok()?
         } else {
-            None
+            (None, 0)
         };
         let line_height = px(self.config.line_height);
         let height = line_height
@@ -51,6 +52,7 @@ impl Workspace {
             origin: point(px(0.), px(0.)),
             line,
             raw: true,
+            body_start,
             wrapped,
             line_height,
             height,

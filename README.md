@@ -146,6 +146,8 @@ Press **F1** or enter `:help` for the in-app reference. Browse Editing, Navigati
 
 Click a pane to focus it. In Markdown, clicks place the caret near the clicked text and preserve Insert mode; dragging or double-clicking a word creates a Vim Visual selection. Active prose stays wrapped, and Insert-mode Up/Down move between visual rows. In **Dev Mode**, footer controls toggle Outline, Files, and Help; an open terminal also has a Hide Terminal control. Hover for a tooltip identifying the action; icons stay highlighted while their dock or guide is open. Footer buttons, buffer tabs, and tab-close controls have distinct hover and pressed highlights. The macOS title bar centers **Rockdown — {buffer name}** and updates when you switch or save a buffer under a new name.
 
+Wrapped bullet, numbered, and task-list items use hanging indentation: continuation rows align with the first row's body text, in both preview and editing mode.
+
 ### Dev and Writer modes
 
 Use the **Dev / Writer** control at the top-right, **Cmd/Ctrl-Shift-M**, or `:uimode`.
