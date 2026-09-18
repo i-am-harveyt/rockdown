@@ -15,6 +15,10 @@ impl Workspace {
         }
     }
     fn action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
+        if action == "cancel-export" {
+            self.cancel_pdf_export(cx);
+            return Ok(());
+        }
         if self.ui_mode == UiMode::Writer && action == "status-bar" {
             self.toggle_writer_chrome(window, cx);
             return Ok(());
@@ -102,6 +106,7 @@ impl Workspace {
             )?,
             "open" => self.open_dialog(window, cx),
             "save-as" => self.save_dialog(self.documents.active_id(), true, None, window, cx),
+            "export-pdf" => self.export_pdf_dialog(window, cx)?,
             "save" => {
                 if self.pane == Pane::Explorer {
                     self.save(None, false)?;
@@ -267,6 +272,8 @@ impl Workspace {
             .map_or((command, ""), |(a, b)| (a, b.trim()));
         match verb {
             "w" | "w!" => self.save((!arg.is_empty()).then(|| Path::new(arg)), verb == "w!")?,
+            "export-pdf" if arg.is_empty() => self.export_pdf_dialog(window, cx)?,
+            "cancel-export" if arg.is_empty() => self.cancel_pdf_export(cx),
             "wq" => {
                 self.save((!arg.is_empty()).then(|| Path::new(arg)), false)?;
                 self.request_window_close(window, cx);

@@ -233,6 +233,8 @@ fn run() -> Result<()> {
                 MenuItem::separator(),
                 MenuItem::action("Save", rockdown::app::Save),
                 MenuItem::action("Save As…", rockdown::app::SaveAs),
+                MenuItem::action("Export PDF…", rockdown::app::ExportPdf),
+                MenuItem::action("Cancel PDF Export", rockdown::app::CancelExport),
                 MenuItem::separator(),
                 MenuItem::action("Close Document", rockdown::app::BufferDelete),
             ],
