@@ -59,6 +59,60 @@ fn save_dialog_targets_original_buffer_and_cancel_preserves_edits(cx: &mut TestA
 }
 
 #[gpui::test]
+fn cancelling_pdf_dialog_preserves_unsaved_document_and_files(cx: &mut TestAppContext) {
+    let (dir, mut window, view) = workspace(cx);
+    let existing_pdf = dir.path().join("existing.pdf");
+    std::fs::write(&existing_pdf, b"previous export").unwrap();
+    window.update(|_, cx| {
+        view.update(cx, |app, _| {
+            app.documents
+                .current_mut()
+                .buffer
+                .insert_text("unsaved draft");
+        });
+    });
+    window.simulate_keystrokes("cmd-shift-p");
+    window.run_until_parked();
+    cx.simulate_new_path_selection(|_| None);
+    window.run_until_parked();
+    window.update(|_, cx| {
+        let document = view.read(cx).documents.current();
+        assert_eq!(document.buffer.text(), "unsaved draft");
+        assert!(document.buffer.dirty());
+        assert!(document.path.is_none());
+    });
+    assert_eq!(std::fs::read(existing_pdf).unwrap(), b"previous export");
+}
+
+#[gpui::test]
+fn missing_pdf_converter_preserves_destination_and_unsaved_edits(cx: &mut TestAppContext) {
+    let (dir, mut window, view) = workspace(cx);
+    let destination = dir.path().join("existing.pdf");
+    std::fs::write(&destination, b"previous export").unwrap();
+    window.update(|_, cx| {
+        view.update(cx, |app, _| {
+            app.config.pdf.pandoc = dir.path().join("missing-pandoc").display().to_string();
+            app.documents
+                .current_mut()
+                .buffer
+                .insert_text("unsaved draft");
+        });
+    });
+    window.simulate_keystrokes("cmd-shift-p");
+    window.run_until_parked();
+    cx.simulate_new_path_selection(|_| Some(destination.clone()));
+    window.run_until_parked();
+    assert!(window.debug_bounds("pdf-notice").is_some());
+    assert_eq!(std::fs::read(destination).unwrap(), b"previous export");
+    window.update(|_, cx| {
+        let document = view.read(cx).documents.current();
+        assert_eq!(document.buffer.text(), "unsaved draft");
+        assert!(document.buffer.dirty());
+        assert!(document.path.is_none());
+    });
+}
+
+#[gpui::test]
 fn close_save_cancel_keeps_tab_and_close_window_checks_inactive_buffers(cx: &mut TestAppContext) {
     let (_dir, mut window, view) = workspace(cx);
     window.update(|_, cx| {

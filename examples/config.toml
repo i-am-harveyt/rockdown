@@ -19,6 +19,17 @@ terminal_height = 240
 # shell = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
 # shell = 'C:\Program Files\PowerShell\7\pwsh.exe'
 
+# Optional PDF export uses separately installed Pandoc >= 3.1.2 and Typst >= 0.13.
+# Bare executable names use PATH; macOS also searches Homebrew's standard bin dirs.
+# Absolute paths are supported; these settings are executable paths, not shell commands.
+[pdf]
+pandoc = "pandoc"
+typst = "typst"
+# Print fonts are independent of the editor font/theme. Unset values use installed
+# CJK/monospace families. Run `typst fonts` to list choices; no fonts are bundled.
+# main_font = "PingFang TC" # macOS example; Noto Sans CJK TC is another option.
+# mono_font = "Menlo"
+
 [theme]
 # Built-ins: rockdown, paper. Other IDs load colorscheme/<id>.toml beside this file.
 # For Nord, copy examples/nord.toml into colorscheme/nord.toml and select "nord".
@@ -76,6 +87,7 @@ thickness = 1.5
 # Supported actions: new, open, save, save-as, paste (clipboard), explorer (toggle),
 # terminal, editor, help, themes, ui-mode, outline, buffer-delete, previous-buffer, next-buffer.
 # tab-bar, status-bar, undo, redo, bold, italic, underline, strikethrough, inline-code.
+# export-pdf opens the destination dialog; cancel-export cancels the running job.
 # Formatting requires a Markdown selection; repeated use toggles it off.
 # Each nonempty selected physical line is formatted separately; one undo restores all.
 # Underline writes <u> HTML tags, which other Markdown renderers may strip or ignore.
@@ -88,6 +100,8 @@ cmd-shift-s = "save-as"
 ctrl-shift-s = "save-as"
 cmd-s = "save"
 ctrl-s = "save"
+cmd-shift-p = "export-pdf"
+ctrl-shift-p = "export-pdf"
 cmd-v = "paste"
 ctrl-shift-v = "paste"
 cmd-e = "explorer"

@@ -1,8 +1,8 @@
 use super::{
-    Bold, BufferDelete, EditorPane, ExplorerToggle, HelpToggle, InlineCode, Italic, NewDocument,
-    NextBuffer, OpenDocument, OutlineToggle, Pane, Paste, PreviousBuffer, Redo, Save, SaveAs,
-    StatusBarToggle, Strikethrough, TabBarToggle, TerminalToggle, ThemesToggle, UiMode,
-    UiModeToggle, Underline, Undo, Workspace,
+    Bold, BufferDelete, CancelExport, EditorPane, ExplorerToggle, ExportPdf, HelpToggle,
+    InlineCode, Italic, NewDocument, NextBuffer, OpenDocument, OutlineToggle, Pane, Paste,
+    PreviousBuffer, Redo, Save, SaveAs, StatusBarToggle, Strikethrough, TabBarToggle,
+    TerminalToggle, ThemesToggle, UiMode, UiModeToggle, Underline, Undo, Workspace,
 };
 use crate::vim::Mode;
 use gpui::{prelude::*, *};
@@ -89,6 +89,12 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &SaveAs, window, cx| this.run_action("save-as", window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ExportPdf, window, cx| {
+                this.run_action("export-pdf", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CancelExport, window, cx| {
+                this.run_action("cancel-export", window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &Paste, window, cx| this.run_action("paste", window, cx)),
             )
@@ -368,6 +374,10 @@ impl Render for Workspace {
                         .child(error),
                 )
             })
+            .when(
+                self.pdf_job.is_some() || self.pdf_feedback.is_some(),
+                |root| root.child(self.pdf_notice(cx)),
+            )
             .when(self.config.status_bar_visible && !writer, |root| {
                 root.child(
                     div()
@@ -417,6 +427,7 @@ impl Render for Workspace {
                                 .font_family(self.config.font_family.clone())
                                 .child(location),
                         )
+                        .child(self.dock_button("Export PDF", "export-pdf", false, cx))
                         .child(self.dock_button(
                             "Outline",
                             "outline",
@@ -464,7 +475,7 @@ impl Render for Workspace {
                                         84.
                                     }))
                                     .right(px(if self.writer_chrome_visible {
-                                        192.
+                                        240.
                                     } else {
                                         16.
                                     }))

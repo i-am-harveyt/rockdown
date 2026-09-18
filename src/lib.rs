@@ -8,6 +8,7 @@ pub mod keyboard;
 pub mod markdown;
 mod markdown_edit;
 pub mod outline;
+pub mod pdf;
 pub mod recovery;
 pub mod surface;
 pub mod terminal;

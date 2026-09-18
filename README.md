@@ -9,6 +9,7 @@ A lightweight, native Markdown editor built with **Rust and GPUI**. Write in pla
 - **Multiple documents:** tabs preserve unsaved text and editing history; local recovery restores drafts after a crash.
 - **Dev and Writer layouts:** a docked workspace or a distraction-free writing view with floating controls.
 - **Files and terminal:** edit filenames to stage filesystem operations, or open an embedded shell.
+- **PDF export:** export unsaved Markdown through separately installed Pandoc and Typst; no typesetting engine is bundled.
 - **TOML configuration:** customize typography, themes, layout, and shortcuts.
 
 Preview applies to `.md` files and untitled documents. Other files open as plain text. All documents remain UTF-8 text on disk.
@@ -71,6 +72,7 @@ If `WindowsSdkVerBinPath` is unavailable, set `GPUI_FXC_PATH` to your installed 
 | --- | --- |
 | `Cmd/Ctrl-N` / `Cmd/Ctrl-O` | New document / open file |
 | `Cmd/Ctrl-S` / `Cmd/Ctrl-Shift-S` | Save / Save As |
+| `Cmd/Ctrl-Shift-P` | Export PDF |
 | `Ctrl-PageUp` / `Ctrl-PageDown` | Previous / next document |
 | `Cmd-W` / `Ctrl-Shift-W` | Close document on macOS / Windows and Linux |
 | `Cmd/Ctrl-E` | Show or hide Files |
@@ -100,6 +102,62 @@ The terminal starts in the current Files directory. Hiding it keeps the shell ru
 - Saves detect external file changes rather than silently overwriting them. Inspect conflicts before using `:e!` to discard edits and reload, or `:w!` to force an overwrite.
 - Local recovery checkpoints preserve drafts, **not automatic saves or backups**. Recent edits can be lost between checkpoints; undo history, terminal sessions, and staged Files operations do not survive a restart. Recovery files are local and unencrypted.
 - Closing a dirty document prompts to Save / Discard / Cancel. `:q!` explicitly discards all unsaved and staged changes.
+
+### Exporting PDF
+
+Install [Pandoc](https://pandoc.org/installing.html) **3.1.2 or newer** and
+[Typst](https://github.com/typst/typst/releases) **0.13 or newer** separately.
+On macOS with Homebrew:
+
+```sh
+brew install pandoc typst
+```
+
+Use **Cmd/Ctrl-Shift-P**, the PDF export control, **File → Export PDF…**, or
+`:export-pdf`, then choose a `.pdf` destination. Export runs in the background;
+use **Cancel** in its notification or `:cancel-export` to stop it. A successful
+export offers **Open PDF**. Errors and warnings remain visible until dismissed.
+Missing tools do not prevent normal editing.
+
+- The text snapshot is captured when export is invoked, **including unsaved
+  edits**. Export does not save, rename, or mark the Markdown document clean.
+- Relative images resolve beside the original Markdown file, or against the
+  Files directory captured at invocation for an untitled document—not beside the
+  exported PDF. Images are snapshotted when the background export processes them.
+- Local PNG, JPEG, GIF, and WebP are supported; animations use the first frame.
+  Remote/data/network image URLs and SVG are rejected rather than silently
+  omitted. Missing or invalid images fail the export.
+- PDF uses a fixed light **A4 layout with 20 mm margins**, page numbers, wrapping
+  code blocks, and tables that continue across pages with repeated headers.
+  The editor theme does not affect print styling. Image width titles such as
+  `"40%"` and `"320px"` are supported; percentages refer to the printable page
+  width, and oversized images are scaled to fit.
+- Pandoc's GFM reader handles conversion, with adaptations for balanced `<u>`
+  spans and image widths. Other HTML and raw code are exported literally, not
+  executed. Document-supplied metadata, templates, and filters are not loaded;
+  export does not download packages or images.
+- Tools compile in an isolated temporary directory. Only a completed PDF
+  replaces the destination; errors and cancellation preserve an existing PDF.
+  Source-document aliases and symbolic-link destinations are rejected.
+
+Executables are discovered on `PATH`; macOS also checks `/opt/homebrew/bin` and
+`/usr/local/bin` for apps launched from Finder. Override discovery and print fonts
+in the user configuration when needed:
+
+```toml
+[pdf]
+pandoc = "/opt/homebrew/bin/pandoc"
+typst = "/opt/homebrew/bin/typst"
+main_font = "PingFang TC"
+mono_font = "Menlo"
+```
+
+Executable settings accept absolute paths or bare executable names, not shell
+commands. These example paths/fonts are macOS-specific; use your installed
+tools and families on other systems. Without font overrides, export chooses
+available CJK and monospace families; no fonts are bundled. Use `typst fonts`
+to list installed families. Missing configured fonts fail explicitly, and other
+font/compiler warnings appear with the export result.
 
 ## Configuration
 

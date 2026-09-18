@@ -21,6 +21,7 @@ mod keyboard;
 mod navigation;
 mod outline_picker;
 mod panes;
+mod pdf;
 mod recovery;
 mod render;
 mod text_input;
@@ -34,6 +35,8 @@ actions!(
         NewDocument,
         OpenDocument,
         SaveAs,
+        ExportPdf,
+        CancelExport,
         Paste,
         Undo,
         Redo,
@@ -70,6 +73,8 @@ pub fn bind_config_keys(config: &Config, cx: &mut App) {
             "new" => Box::new(NewDocument),
             "open" => Box::new(OpenDocument),
             "save-as" => Box::new(SaveAs),
+            "export-pdf" => Box::new(ExportPdf),
+            "cancel-export" => Box::new(CancelExport),
             "paste" => Box::new(Paste),
             "undo" => Box::new(Undo),
             "redo" => Box::new(Redo),
@@ -176,6 +181,8 @@ pub struct Workspace {
     pub marked: Option<Range<usize>>,
     dialog_pending: bool,
     search: String,
+    pdf_job: Option<pdf::PdfJob>,
+    pdf_feedback: Option<pdf::PdfFeedback>,
     window_prefix: bool,
     pub follow_cursor: bool,
     pane_heights: [f32; 3],
@@ -253,6 +260,8 @@ impl Workspace {
             marked: None,
             dialog_pending: false,
             search: String::new(),
+            pdf_job: None,
+            pdf_feedback: None,
             window_prefix: false,
             follow_cursor: true,
             pane_heights: [0.; 3],

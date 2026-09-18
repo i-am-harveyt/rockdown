@@ -227,6 +227,20 @@ impl Workspace {
                         let p = |x, y| bounds.origin + point(px(x), px(y));
                         let mut path = PathBuilder::stroke(px(1.5));
                         match action {
+                            "export-pdf" => {
+                                path.move_to(p(4., 2.));
+                                path.line_to(p(12., 2.));
+                                path.line_to(p(17., 7.));
+                                path.line_to(p(17., 12.));
+                                path.move_to(p(4., 2.));
+                                path.line_to(p(4., 18.));
+                                path.line_to(p(8., 18.));
+                                path.move_to(p(11., 15.));
+                                path.line_to(p(19., 15.));
+                                path.move_to(p(16., 12.));
+                                path.line_to(p(19., 15.));
+                                path.line_to(p(16., 18.));
+                            }
                             "outline" => {
                                 for (indent, y) in [(2., 5.), (6., 10.), (6., 15.)] {
                                     path.move_to(p(indent, y));

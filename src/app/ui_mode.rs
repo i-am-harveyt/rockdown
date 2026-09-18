@@ -335,6 +335,7 @@ impl Workspace {
                     .flex()
                     .gap_2()
                     .occlude()
+                    .child(self.dock_button("Export PDF", "export-pdf", false, cx))
                     .child(self.dock_button(
                         "Outline",
                         "outline",

@@ -413,6 +413,11 @@ pub(super) const HELP: &[HelpSection] = &[
             ("Ctrl/Cmd-S", "Save the current document"),
             ("Ctrl/Cmd-Shift-S", "Save As"),
             (
+                "Ctrl/Cmd-Shift-P / :export-pdf",
+                "Export the current Markdown document to PDF",
+            ),
+            (":cancel-export", "Cancel the running PDF export"),
+            (
                 ":w [file] / :w!",
                 "Save; explicitly overwrite a disk conflict",
             ),
@@ -433,6 +438,7 @@ pub(super) const HELP: &[HelpSection] = &[
         notes: &[
             "Click a tab to select it or its × to close. Unsaved changes prompt Save / Discard / Cancel. Closing a buffer never deletes its file; opening another file preserves other edits.",
             "Buffer aliases: :bprevious / :previous-buffer, :bnext / :next-buffer, and :bdelete / :buffer-delete.",
+            "PDF export uses separately installed Pandoc and Typst. It exports a snapshot including unsaved edits, without saving the Markdown file. Untitled image paths are relative to the Files directory when export starts.",
             r"Substitution uses Rust regex: & inserts the match, \1 inserts a capture. g replaces every match; i/I controls case sensitivity. One u undoes the entire substitution.",
         ],
     },

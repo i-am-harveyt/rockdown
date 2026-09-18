@@ -24,7 +24,54 @@ pub struct Config {
     pub shell: String,
     pub theme: Theme,
     pub markdown: MarkdownStyle,
+    pub pdf: PdfConfig,
     pub keys: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PdfConfig {
+    pub pandoc: String,
+    pub typst: String,
+    pub main_font: Option<String>,
+    pub mono_font: Option<String>,
+}
+
+impl Default for PdfConfig {
+    fn default() -> Self {
+        Self {
+            pandoc: "pandoc".into(),
+            typst: "typst".into(),
+            main_font: None,
+            mono_font: None,
+        }
+    }
+}
+
+impl PdfConfig {
+    pub fn validate(&self) -> Result<()> {
+        for (key, value) in [("pdf.pandoc", &self.pandoc), ("pdf.typst", &self.typst)] {
+            if value.trim().is_empty() || value.chars().any(char::is_control) {
+                bail!("{key} must be nonblank and contain no control characters");
+            }
+            if !Path::new(value).is_absolute()
+                && (value.contains(['/', '\\', ':']) || matches!(value.as_str(), "." | ".."))
+            {
+                bail!("{key} must be an absolute path or a bare executable name");
+            }
+        }
+        for (key, value) in [
+            ("pdf.main_font", &self.main_font),
+            ("pdf.mono_font", &self.mono_font),
+        ] {
+            if let Some(value) = value
+                && (value.trim().is_empty() || value.chars().any(char::is_control))
+            {
+                bail!("{key} must be nonblank and contain no control characters");
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -476,6 +523,7 @@ impl Default for Config {
                 .unwrap_or_else(|| if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }.into()),
             theme: Theme::default(),
             markdown: MarkdownStyle::default(),
+            pdf: PdfConfig::default(),
             keys: [
                 ("cmd-n".into(), "new".into()),
                 ("ctrl-n".into(), "new".into()),
@@ -483,6 +531,8 @@ impl Default for Config {
                 ("ctrl-o".into(), "open".into()),
                 ("cmd-shift-s".into(), "save-as".into()),
                 ("ctrl-shift-s".into(), "save-as".into()),
+                ("cmd-shift-p".into(), "export-pdf".into()),
+                ("ctrl-shift-p".into(), "export-pdf".into()),
                 ("cmd-s".into(), "save".into()),
                 ("ctrl-s".into(), "save".into()),
                 ("cmd-v".into(), "paste".into()),
@@ -697,6 +747,7 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         crate::image_assets::validate_assets_dir(&self.image_assets_dir)?;
+        self.pdf.validate()?;
         for (name, value, min, max) in [
             ("font_size", self.font_size, 10., 32.),
             ("line_height", self.line_height, self.font_size + 4., 64.),
@@ -759,6 +810,8 @@ impl Config {
                 "new",
                 "open",
                 "save-as",
+                "export-pdf",
+                "cancel-export",
                 "paste",
                 "undo",
                 "redo",
@@ -815,6 +868,62 @@ pub fn parse_color(value: &str) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pdf_configuration_loads_without_installed_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let config_path = root.path().join("config.toml");
+        let pandoc = root.path().join("Not Installed").join("pandoc");
+        let text = format!(
+            r#"
+[pdf]
+pandoc = {}
+typst = 'rockdown-test-missing-typst'
+main_font = 'PingFang TC'
+mono_font = 'Noto Sans Mono CJK TC'
+[keys]
+'ctrl-shift-p' = 'export-pdf'
+'escape' = 'cancel-export'
+"#,
+            serde_json::to_string(pandoc.to_str().unwrap()).unwrap()
+        );
+        std::fs::write(&config_path, text).unwrap();
+        let (config, _) = Config::load(Some(&config_path)).unwrap();
+        assert_eq!(Path::new(&config.pdf.pandoc), pandoc);
+        assert_eq!(config.pdf.main_font.as_deref(), Some("PingFang TC"));
+        assert_eq!(
+            config.pdf.mono_font.as_deref(),
+            Some("Noto Sans Mono CJK TC")
+        );
+    }
+
+    #[test]
+    fn invalid_pdf_values_identify_the_config_key() {
+        for (key, value) in [
+            ("pdf.pandoc", "''"),
+            ("pdf.typst", "'   '"),
+            ("pdf.pandoc", r#""pan\u0000doc""#),
+            ("pdf.typst", r#""typst\n""#),
+            ("pdf.pandoc", "'./pandoc'"),
+            ("pdf.typst", "'bin/typst'"),
+            ("pdf.pandoc", r"'bin\pandoc'"),
+            ("pdf.typst", "'C:typst.exe'"),
+            ("pdf.pandoc", "'.'"),
+            ("pdf.typst", "'..'"),
+            ("pdf.main_font", "'  '"),
+            ("pdf.mono_font", r#""Menlo\t""#),
+        ] {
+            let config = Config::parse(Path::new("c.toml"), &format!("{key} = {value}")).unwrap();
+            let error = config.validate().unwrap_err();
+            assert!(error.to_string().contains(key), "{key}: {error:#}");
+        }
+    }
+
+    #[test]
+    fn pdf_configuration_rejects_unknown_settings() {
+        let error = Config::parse(Path::new("c.toml"), "[pdf]\nengine = 'bundled'").unwrap_err();
+        assert!(format!("{error:#}").contains("engine"));
+    }
 
     #[test]
     fn image_asset_directory_configuration_stays_document_relative() {
